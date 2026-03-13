@@ -31,23 +31,151 @@ Behavior notes:
 - On setup failure, connection state is closed and cleared.
 - Request methods are serialized internally for protocol safety.
 
+### Read result model
+
+Read operations return a structured result so callers can distinguish success, short-read, empty-read, and rejection.
+
+```go
+type ReadStatus string
+
+const (
+    ReadStatusSuccess      ReadStatus = "success"
+    ReadStatusShortRead    ReadStatus = "short-read"
+    ReadStatusEmptyRead    ReadStatus = "empty-read"
+    ReadStatusRejected     ReadStatus = "rejected"
+    ReadStatusTimeout      ReadStatus = "timeout"
+    ReadStatusTransportErr ReadStatus = "transport-error"
+    ReadStatusProtocolErr  ReadStatus = "protocol-error"
+    ReadStatusInconclusive ReadStatus = "inconclusive"
+)
+
+type ReadResult struct {
+    Status          ReadStatus
+    RequestedLength int
+    ReturnedLength  int
+    Data            []byte
+    Warnings        []string
+    Error           string
+    ItemStatus      string
+    ReturnCode      byte
+}
+
+func (r *ReadResult) OK() bool   // true if Status == ReadStatusSuccess
+func (r *ReadResult) Err() error // non-nil when Status is not success
+```
+
 ### Read/write API
 
 ```go
-func (c *Client) ReadArea(ctx context.Context, addr model.Address) ([]byte, error)
+func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult, error)
 func (c *Client) WriteArea(ctx context.Context, addr model.Address, data []byte) error
 
-func (c *Client) ReadDB(ctx context.Context, dbNum, offset, size int) ([]byte, error)
+func (c *Client) ReadDB(ctx context.Context, dbNum, offset, size int) (*ReadResult, error)
 func (c *Client) WriteDB(ctx context.Context, dbNum, offset int, data []byte) error
-func (c *Client) ReadInputs(ctx context.Context, offset, size int) ([]byte, error)
-func (c *Client) ReadOutputs(ctx context.Context, offset, size int) ([]byte, error)
-func (c *Client) ReadMerkers(ctx context.Context, offset, size int) ([]byte, error)
+func (c *Client) ReadInputs(ctx context.Context, offset, size int) (*ReadResult, error)
+func (c *Client) ReadOutputs(ctx context.Context, offset, size int) (*ReadResult, error)
+func (c *Client) ReadMerkers(ctx context.Context, offset, size int) (*ReadResult, error)
 ```
 
 Behavior notes:
 
-- ReadArea chunks requests based on negotiated PDU size.
+- Read methods return `*ReadResult` and a connection/setup `error`. Use `result.OK()` for success; `result.Err()` for a non-success read outcome; `result.Data` for the payload. Empty or short reads are never reported as success.
+- ReadArea chunks requests based on negotiated PDU size. Status is derived from requested vs returned length (success, short-read, empty-read) or from S7 return codes (rejected).
 - WriteArea uses WriteVar with optional rate limiting.
+
+### Range scan API (Phase 2)
+
+Scan an area to discover readable byte ranges. The client must be connected for non-empty ranges.
+
+```go
+type RangeProbeRequest struct {
+    Area        model.Area
+    DBNumber    int
+    Start       int
+    End         int
+    Step        int           // if 0, use ProbeSize
+    ProbeSize   int
+    Retries     int
+    RetryDelay  time.Duration
+    Repeat      int
+    Interval    time.Duration
+    Parallelism int
+}
+
+type ReadProbeObservation struct {
+    Offset  int
+    Request model.Address
+    Result  ReadResult
+    Stable  *bool
+    AllZero *bool
+}
+
+type ReadableSpan struct {
+    Start   int
+    End     int
+    Status  ReadStatus
+    Stable  *bool
+    AllZero *bool
+    Notes   []string
+}
+
+type RangeProbeSummary struct {
+    ReadableSpans     []ReadableSpan
+    EmptySpans        []ReadableSpan
+    FailedSpans       []ReadableSpan
+    InconclusiveSpans []ReadableSpan
+}
+
+type RangeProbeResult struct {
+    Area     model.Area
+    DBNumber int
+    Spans    []ReadableSpan
+    Probes   []ReadProbeObservation
+    Summary  RangeProbeSummary
+}
+
+func (c *Client) ProbeReadableRanges(ctx context.Context, req RangeProbeRequest) (*RangeProbeResult, error)
+```
+
+Behavior: For each offset in [Start, End) by Step, performs a read of ProbeSize bytes (one probe per offset). Adjacent probes with the same status are merged into spans. Summary aggregates spans by readable/empty/failed/inconclusive. Optional Repeat and Interval set Stable/AllZero; Retries with mixed outcomes yield Inconclusive. Read-only.
+
+### Compare read API (Phase 3)
+
+Perform the same read across multiple rack/slot candidates; detect if the endpoint responds identically (rack/slot-insensitive).
+
+```go
+type RackSlot struct {
+    Rack int
+    Slot int
+}
+
+type CompareReadRequest struct {
+    Address    string
+    Port       int
+    Candidates []RackSlot
+    Area       model.Area
+    DBNumber   int
+    Offset     int
+    Size       int
+    Timeout    time.Duration
+}
+
+type CompareReadCandidate struct {
+    Rack   int
+    Slot   int
+    Result ReadResult
+}
+
+type CompareReadResult struct {
+    Request             CompareReadRequest
+    ByCandidate         []CompareReadCandidate
+    RackSlotInsensitive bool
+}
+
+func CompareRead(ctx context.Context, req CompareReadRequest) (*CompareReadResult, error)
+```
+
+Behavior: For each candidate, creates a client, connects with that rack/slot, performs one read, closes. If all candidates return success and the returned data is identical, RackSlotInsensitive is true.
 
 ### Discovery API
 

@@ -2,23 +2,34 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/otfabric/s7comm/model"
 	"github.com/otfabric/s7comm/wire"
 )
 
-// ReadArea reads data from an S7 memory area
-func (c *Client) ReadArea(ctx context.Context, addr model.Address) ([]byte, error) {
+// ReadArea reads data from an S7 memory area and returns a structured result with status and lengths.
+// Use result.OK() for success; result.Err() for a non-success outcome; result.Data for the payload.
+func (c *Client) ReadArea(ctx context.Context, addr model.Address) (*ReadResult, error) {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
+
+	reqLen := addr.Size
+	if reqLen < 0 {
+		reqLen = 0
+	}
+	out := &ReadResult{
+		RequestedLength: reqLen,
+		ReturnedLength:  0,
+		Data:            nil,
+	}
 
 	c.mu.RLock()
 	pduSize := c.pduSize
 	rateLimit := c.opts.rateLimit
 	c.mu.RUnlock()
 
-	// Calculate max data per request (PDU minus overhead)
 	maxData := pduSize - 18
 	if maxData < 1 {
 		maxData = 200
@@ -55,22 +66,86 @@ func (c *Client) ReadArea(ctx context.Context, addr model.Address) ([]byte, erro
 
 		items, err := wire.ParseReadVarResponse(param, data)
 		if err != nil {
-			return nil, err
+			out.Status = ReadStatusProtocolErr
+			out.Error = err.Error()
+			out.ReturnedLength = len(result)
+			out.Data = result
+			return out, nil
 		}
 
 		if len(items) == 0 {
-			return nil, &wire.S7Error{Message: "no data returned"}
+			out.Status = ReadStatusEmptyRead
+			out.Error = "no data returned"
+			out.ReturnedLength = len(result)
+			out.Data = result
+			return out, nil
 		}
 
-		if err := wire.ReturnCodeError(items[0].ReturnCode); err != nil {
-			return nil, err
+		item := items[0]
+		if err := wire.ReturnCodeError(item.ReturnCode); err != nil {
+			out.Status = ReadStatusRejected
+			out.ReturnCode = item.ReturnCode
+			out.Error = err.Error()
+			out.ItemStatus = wireReturnCodeString(item.ReturnCode)
+			out.ReturnedLength = len(result)
+			out.Data = result
+			return out, nil
 		}
 
-		result = append(result, items[0].Data...)
+		result = append(result, item.Data...)
 		offset += chunkSize
 	}
 
-	return result, nil
+	out.ReturnedLength = len(result)
+	out.Data = result
+	out.Status = ClassifyReadOutcome(reqLen, out.ReturnedLength)
+	if out.Status == ReadStatusEmptyRead && out.Error == "" {
+		out.Error = "target returned no data for requested range"
+	}
+	if out.Status == ReadStatusShortRead && out.Error == "" {
+		out.Error = fmt.Sprintf("short read: requested %d, got %d", reqLen, out.ReturnedLength)
+	}
+	return out, nil
+}
+
+// ClassifyReadOutcome returns the ReadStatus for a read that requested requested bytes and returned returned bytes.
+func ClassifyReadOutcome(requested, returned int) ReadStatus {
+	if requested <= 0 {
+		if returned == 0 {
+			return ReadStatusSuccess
+		}
+		return ReadStatusSuccess
+	}
+	if returned == 0 {
+		return ReadStatusEmptyRead
+	}
+	if returned < requested {
+		return ReadStatusShortRead
+	}
+	return ReadStatusSuccess
+}
+
+func wireReturnCodeString(code byte) string {
+	switch code {
+	case wire.RetCodeSuccess:
+		return "success"
+	case wire.RetCodeHWFault:
+		return "hardware fault"
+	case wire.RetCodeAccessFault:
+		return "access denied"
+	case wire.RetCodeAddressFault:
+		return "invalid address"
+	case wire.RetCodeDataTypeFault:
+		return "data type not supported"
+	case wire.RetCodeDataSizeFault:
+		return "data size mismatch"
+	case wire.RetCodeBusy:
+		return "object busy"
+	case wire.RetCodeNotAvailable:
+		return "object not available"
+	default:
+		return fmt.Sprintf("return code 0x%02X", code)
+	}
 }
 
 // WriteArea writes data to an S7 memory area
@@ -108,8 +183,8 @@ func (c *Client) WriteArea(ctx context.Context, addr model.Address, data []byte)
 	return wire.ParseWriteVarResponse(param, respData)
 }
 
-// ReadDB is a convenience function to read from a data block
-func (c *Client) ReadDB(ctx context.Context, dbNum, offset, size int) ([]byte, error) {
+// ReadDB reads from a data block. Returns *ReadResult; use result.OK() and result.Data.
+func (c *Client) ReadDB(ctx context.Context, dbNum, offset, size int) (*ReadResult, error) {
 	return c.ReadArea(ctx, model.Address{
 		Area:     model.AreaDB,
 		DBNumber: dbNum,
@@ -128,8 +203,8 @@ func (c *Client) WriteDB(ctx context.Context, dbNum, offset int, data []byte) er
 	}, data)
 }
 
-// ReadInputs reads from the input area
-func (c *Client) ReadInputs(ctx context.Context, offset, size int) ([]byte, error) {
+// ReadInputs reads from the input area. Returns *ReadResult; use result.OK() and result.Data.
+func (c *Client) ReadInputs(ctx context.Context, offset, size int) (*ReadResult, error) {
 	return c.ReadArea(ctx, model.Address{
 		Area:  model.AreaInputs,
 		Start: offset,
@@ -137,8 +212,8 @@ func (c *Client) ReadInputs(ctx context.Context, offset, size int) ([]byte, erro
 	})
 }
 
-// ReadOutputs reads from the output area
-func (c *Client) ReadOutputs(ctx context.Context, offset, size int) ([]byte, error) {
+// ReadOutputs reads from the output area. Returns *ReadResult; use result.OK() and result.Data.
+func (c *Client) ReadOutputs(ctx context.Context, offset, size int) (*ReadResult, error) {
 	return c.ReadArea(ctx, model.Address{
 		Area:  model.AreaOutputs,
 		Start: offset,
@@ -146,8 +221,8 @@ func (c *Client) ReadOutputs(ctx context.Context, offset, size int) ([]byte, err
 	})
 }
 
-// ReadMerkers reads from the merker area
-func (c *Client) ReadMerkers(ctx context.Context, offset, size int) ([]byte, error) {
+// ReadMerkers reads from the merker area. Returns *ReadResult; use result.OK() and result.Data.
+func (c *Client) ReadMerkers(ctx context.Context, offset, size int) (*ReadResult, error) {
 	return c.ReadArea(ctx, model.Address{
 		Area:  model.AreaMerkers,
 		Start: offset,

@@ -1,3 +1,32 @@
+# Release v0.4.0
+
+**Date:** 2026-03-13
+**Previous release:** v0.3.1
+
+## Summary
+
+**Phase 1 – Read result model**
+
+- **Rich read result model**: Read operations now return `*ReadResult` instead of `([]byte, error)`. `ReadResult` includes `Status` (success, short-read, empty-read, rejected, timeout, transport-error, protocol-error), `RequestedLength`, `ReturnedLength`, `Data`, `Warnings`, `Error`, and optional protocol detail (`ItemStatus`, `ReturnCode`).
+- **Explicit classification**: Empty reads and short reads are never reported as success. Use `result.OK()` for success, `result.Err()` for a failed read outcome, and `result.Data` for the payload.
+- **Read API change**: `ReadArea`, `ReadDB`, `ReadInputs`, `ReadOutputs`, and `ReadMerkers` now return `(*ReadResult, error)`. The second return value is reserved for connection/setup failures; read outcome (including rejection or short/empty) is in `result.Status`.
+- **Helpers**: `ReadResult.OK()` and `ReadResult.Err()` for simple checks; `ReadOutcomeError` type for error wrapping.
+
+**Phase 2 – Range scan**
+
+- **ProbeReadableRanges**: `(c *Client) ProbeReadableRanges(ctx, req)` scans an area over [Start, End) by Step, one read of ProbeSize bytes per offset. Client must be connected. Returns `RangeProbeResult` with `Spans` (consolidated adjacent same-status ranges), `Probes` (raw per-offset observations), and `Summary` (ReadableSpans, EmptySpans, FailedSpans, InconclusiveSpans).
+- **Options**: Retries (mixed outcomes → Inconclusive), Repeat + Interval (Stable, AllZero heuristics), Parallelism. Read-only.
+
+**Phase 3 – Compare read**
+
+- **CompareRead**: Package-level `CompareRead(ctx, req)` runs the same read for each rack/slot in `Candidates` (new connection per candidate). Returns `CompareReadResult` with `ByCandidate` (one `ReadResult` per candidate) and `RackSlotInsensitive` (true when all succeeded with identical data).
+- **RackSlot** type for candidate list.
+
+## Breaking changes
+
+- **Read methods**: All read methods now return `(*ReadResult, error)` instead of `([]byte, error)`. Callers must use `result, err := c.ReadDB(...)`; check `err` for connection failure; then check `result.OK()` or `result.Err()` and use `result.Data` for the payload.
+
+---
 # Release v0.3.1
 
 **Date:** 2026-03-13

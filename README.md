@@ -9,7 +9,8 @@ A pure Go implementation of the Siemens S7 communication protocol.
 The library provides:
 
 - S7 client connection setup (TPKT + COTP + S7 setup communication)
-- Read/write operations for DB, inputs, outputs, and merkers
+- Read/write operations for DB, inputs, outputs, and merkers (with rich `ReadResult` and explicit status)
+- Readable range scan and compare-read across rack/slot candidates
 - Device discovery over CIDR ranges with rack/slot probing
 - SZL-based identification and diagnostics helpers
 - Block listing, block metadata retrieval, and block upload
@@ -49,12 +50,15 @@ func main() {
 	}
 	defer c.Close()
 
-	data, err := c.ReadDB(ctx, 1, 0, 16)
+	result, err := c.ReadDB(ctx, 1, 0, 16)
 	if err != nil {
 		log.Fatal(err)
 	}
+	if !result.OK() {
+		log.Fatal(result.Err())
+	}
 
-	fmt.Printf("DB1.DBB0..15 = % X\n", data)
+	fmt.Printf("DB1.DBB0..15 = % X\n", result.Data)
 }
 ```
 
@@ -121,6 +125,43 @@ The result exposes summary counts: **SetupAccepted**, **ConfirmedByQuery**, and 
 | `rejected`       | Target rejected (S7 error)                                      |
 
 Use `StopOnFirst: true` to stop after the first valid combination; in strict mode that means the first `valid-query`.
+
+## Readable range scan
+
+Scan an area to discover which byte ranges are readable (client must be connected):
+
+```go
+result, err := c.ProbeReadableRanges(ctx, client.RangeProbeRequest{
+	Area:      model.AreaInputs,
+	Start:     0,
+	End:       256,
+	Step:      8,
+	ProbeSize: 8,
+	Repeat:    1,
+	Retries:   0,
+})
+// result.Spans = consolidated [Start, End) ranges per status
+// result.Summary.ReadableSpans, .EmptySpans, .FailedSpans, .InconclusiveSpans
+// result.Probes = raw per-offset observations
+```
+
+## Compare read
+
+Run the same read across multiple rack/slot candidates to detect whether the endpoint responds identically (rack/slot-insensitive):
+
+```go
+result, err := client.CompareRead(ctx, client.CompareReadRequest{
+	Address:    "192.168.0.10",
+	Port:       102,
+	Candidates: []client.RackSlot{{0, 1}, {0, 2}},
+	Area:       model.AreaDB,
+	DBNumber:   1,
+	Offset:     0,
+	Size:       32,
+})
+// result.ByCandidate = one ReadResult per candidate
+// result.RackSlotInsensitive = true if all succeeded with identical data
+```
 
 For CLI usage see [s7commctl probe rackslot](https://github.com/otfabric/s7commctl):
 
