@@ -92,11 +92,8 @@ func TestProbeRackSlotsUnreachable(t *testing.T) {
 		t.Fatalf("expected 1 candidate, got %d", len(result.Candidates))
 	}
 	c := result.Candidates[0]
-	if c.Classification != ClassUnreachable {
-		t.Errorf("Classification: got %q, want %q", c.Classification, ClassUnreachable)
-	}
-	if c.ReachableTCP {
-		t.Error("ReachableTCP should be false")
+	if c.Status != StatusUnreachable {
+		t.Errorf("Status: got %q, want %q", c.Status, StatusUnreachable)
 	}
 	if len(result.Valid) != 0 {
 		t.Errorf("expected no valid candidates, got %d", len(result.Valid))
@@ -130,15 +127,8 @@ func TestProbeRackSlotsTCPOnly(t *testing.T) {
 		t.Fatalf("expected 1 candidate, got %d", len(result.Candidates))
 	}
 	c := result.Candidates[0]
-	if !c.ReachableTCP {
-		t.Error("ReachableTCP should be true for a listening port")
-	}
-	if c.S7SetupOK {
-		t.Error("S7SetupOK should be false for a non-S7 server")
-	}
-	validClass := c.Classification == ClassTCPOnly || c.Classification == ClassCOTPFailed
-	if !validClass {
-		t.Errorf("Classification: got %q, want %q or %q", c.Classification, ClassTCPOnly, ClassCOTPFailed)
+	if c.Status != StatusTCPOnly && c.Status != StatusCOTPOnly {
+		t.Errorf("Status: got %q, want %q or %q", c.Status, StatusTCPOnly, StatusCOTPOnly)
 	}
 	if len(result.Valid) != 0 {
 		t.Errorf("expected no valid candidates, got %d", len(result.Valid))
@@ -468,27 +458,6 @@ func TestProbeRackSlotsSummaryTCPOnly(t *testing.T) {
 	}
 	if result.Candidates[0].Status == StatusTCPOnly && result.TCPOnly != 1 {
 		t.Errorf("expected TCPOnly=1 when status is tcp-only, got %d", result.TCPOnly)
-	}
-}
-
-// TestProbeRackSlotsLegacyClassification verifies that Classification matches Status for backward compatibility.
-func TestProbeRackSlotsLegacyClassification(t *testing.T) {
-	result, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
-		Address:     "127.0.0.1",
-		Port:        1,
-		RackMin:     0,
-		RackMax:     0,
-		SlotMin:     1,
-		SlotMax:     1,
-		Timeout:     200 * time.Millisecond,
-		Parallelism: 1,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	c := result.Candidates[0]
-	if c.Classification != string(c.Status) {
-		t.Errorf("Classification %q should equal Status %q for backward compatibility", c.Classification, c.Status)
 	}
 }
 

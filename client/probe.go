@@ -55,16 +55,6 @@ const (
 	ConfidenceHigh Confidence = "high"
 )
 
-// Legacy classification constants for backward compatibility.
-const (
-	ClassValidQuery   = string(StatusValidQuery)
-	ClassValidConnect = string(StatusValidConnect)
-	ClassRejected     = string(StatusRejected)
-	ClassCOTPFailed   = string(StatusCOTPOnly)
-	ClassTCPOnly      = string(StatusTCPOnly)
-	ClassUnreachable  = string(StatusUnreachable)
-)
-
 // RackSlotProbeRequest configures a host-oriented rack/slot probe.
 type RackSlotProbeRequest struct {
 	Address     string
@@ -107,13 +97,6 @@ type RackSlotCandidate struct {
 	ConfirmedBy ConfirmationKind `json:"confirmedBy,omitempty"`
 	Confidence  Confidence       `json:"confidence"`
 	Error       string           `json:"error,omitempty"`
-
-	// Legacy fields for backward compatibility.
-	ReachableTCP   bool   `json:"-"`
-	ReachableCOTP  bool   `json:"-"`
-	S7SetupOK      bool   `json:"-"`
-	SZLQueryOK     bool   `json:"-"`
-	Classification string `json:"-"` // same as Status
 }
 
 // RackSlotProbeResult holds all candidates, the subset that are valid, and a summary.
@@ -187,7 +170,7 @@ outer:
 			candidates[idx] = c
 
 			// Stop on first valid: non-strict = any setup success; strict = first valid-query
-			validForStop := c.S7SetupOK && !req.Strict
+			validForStop := (c.Status == StatusSetupOnly || c.Status == StatusValidConnect || c.Status == StatusValidQuery) && !req.Strict
 			if req.Strict {
 				validForStop = c.Status == StatusValidQuery
 			}
@@ -219,7 +202,7 @@ outer:
 
 	// Summary counts
 	for _, c := range candidates {
-		if c.S7SetupOK {
+		if c.Status == StatusSetupOnly || c.Status == StatusValidConnect || c.Status == StatusValidQuery {
 			result.SetupAccepted++
 		}
 		if c.Status == StatusValidQuery {
@@ -350,10 +333,8 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageTCP
 		c.Status = StatusUnreachable
 		c.Error = err.Error()
-		applyLegacyCandidate(&c)
 		return c
 	}
-	c.ReachableTCP = true
 
 	conn := transport.New(netConn, req.Timeout)
 	defer func() { _ = conn.Close() }()
@@ -379,7 +360,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageTCP
 		c.Status = StatusTCPOnly
 		c.Error = fmt.Sprintf("COTP send: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	resp, err := conn.ReceiveContext(ctx)
@@ -387,7 +367,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageTCP
 		c.Status = StatusTCPOnly
 		c.Error = fmt.Sprintf("COTP recv: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	_, cotpData, err := wire.ParseTPKT(resp)
@@ -395,7 +374,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageTCP
 		c.Status = StatusTCPOnly
 		c.Error = fmt.Sprintf("TPKT parse: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	cotp, _, err := wire.ParseCOTP(cotpData)
@@ -403,18 +381,14 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageTCP
 		c.Status = StatusTCPOnly
 		c.Error = fmt.Sprintf("COTP parse: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	if cotp.PDUType != wire.COTPTypeCC {
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("expected COTP CC, got 0x%02X", cotp.PDUType)
-		c.ReachableCOTP = true
-		applyLegacyCandidate(&c)
 		return c
 	}
-	c.ReachableCOTP = true
 
 	// S7 setup
 	setupReq := wire.EncodeSetupCommRequest(1, 1, 480)
@@ -424,7 +398,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 setup send: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	resp, err = conn.ReceiveContext(ctx)
@@ -432,7 +405,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 setup recv: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	_, cotpData, err = wire.ParseTPKT(resp)
@@ -440,7 +412,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 setup TPKT parse: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	_, s7Data, err := wire.ParseCOTP(cotpData)
@@ -448,7 +419,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 setup COTP parse: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	header, paramData, err := wire.ParseS7Header(s7Data)
@@ -456,14 +426,12 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageSetup
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 header parse: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	if header.ErrorClass != 0 || header.ErrorCode != 0 {
 		c.Stage = ProbeStageSetup
 		c.Status = StatusRejected
 		c.Error = fmt.Sprintf("S7 error 0x%02X/0x%02X", header.ErrorClass, header.ErrorCode)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	setup, err := wire.ParseSetupCommResponse(paramData)
@@ -471,17 +439,14 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Stage = ProbeStageSetup
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("setup comm parse: %s", err)
-		applyLegacyCandidate(&c)
 		return c
 	}
 	c.PDUSize = setup.PDUSize
-	c.S7SetupOK = true
 
 	if !req.Strict {
 		c.Stage = ProbeStageSetup
 		c.Status = StatusSetupOnly
 		c.Confidence = ConfidenceLow
-		applyLegacyCandidate(&c)
 		return c
 	}
 
@@ -492,7 +457,6 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Status = StatusValidQuery
 		c.ConfirmedBy = confirmedBy
 		c.Confidence = ConfidenceHigh
-		c.SZLQueryOK = true
 	} else {
 		c.Status = StatusValidConnect
 		c.Confidence = ConfidenceLow
@@ -500,14 +464,5 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 			c.Error = "follow-up failed: " + errStr
 		}
 	}
-	applyLegacyCandidate(&c)
 	return c
-}
-
-func applyLegacyCandidate(c *RackSlotCandidate) {
-	c.Classification = string(c.Status)
-	c.ReachableTCP = c.Status != StatusUnreachable
-	c.ReachableCOTP = c.Status != StatusUnreachable && c.Status != StatusTCPOnly
-	c.S7SetupOK = c.Status == StatusSetupOnly || c.Status == StatusValidConnect || c.Status == StatusValidQuery
-	c.SZLQueryOK = c.Status == StatusValidQuery
 }

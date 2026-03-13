@@ -157,7 +157,6 @@ type RackSlotCandidate struct {
     ConfirmedBy  ConfirmationKind
     Confidence   Confidence
     Error        string
-    // Legacy (derived from Status): ReachableTCP, ReachableCOTP, S7SetupOK, SZLQueryOK, Classification
 }
 
 type RackSlotProbeResult struct {
@@ -198,7 +197,6 @@ Behavior notes:
 
 - **Valid list**: without `Strict`, `Valid` contains candidates with status `setup-only`, `valid-connect`, or `valid-query`. With `Strict`, `Valid` contains only `valid-query`.
 - When `Strict` is true and `Confirm` is zero, `Confirm` is set to `ConfirmAny` in `applyProbeDefaults`.
-- Legacy fields `ReachableTCP`, `ReachableCOTP`, `S7SetupOK`, `SZLQueryOK`, and `Classification` are populated from `Status` for backward compatibility.
 - Remote TSAP is derived from rack/slot (PG convention: `0x03RS`) unless `RemoteTSAP` is set.
 - Probe is non-destructive: only connection, setup, and read-only follow-up traffic.
 
