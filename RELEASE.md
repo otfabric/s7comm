@@ -1,3 +1,15 @@
+# Release v0.2.1
+
+**Date:** 2026-03-13
+**Previous release:** v0.2.0
+
+## Summary
+
+- Fix wrong package namespace.
+- Fix linting errors.
+
+---
+
 # Release v0.2.0
 
 **Date:** 2026-03-13

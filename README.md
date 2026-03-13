@@ -36,7 +36,7 @@ import (
 	"log"
 	"time"
 
-	"otfabric/s7comm/client"
+	"github.com/otfabric/s7comm/client"
 )
 
 func main() {

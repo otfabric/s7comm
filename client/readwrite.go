@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"otfabric/s7comm/model"
-	"otfabric/s7comm/wire"
+	"github.com/otfabric/s7comm/model"
+	"github.com/otfabric/s7comm/wire"
 )
 
 // ReadArea reads data from an S7 memory area

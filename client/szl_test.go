@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"otfabric/s7comm/model"
+	"github.com/otfabric/s7comm/model"
 )
 
 func TestPopulateInfoFromRaw(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"otfabric/s7comm/model"
-	"otfabric/s7comm/transport"
-	"otfabric/s7comm/wire"
+	"github.com/otfabric/s7comm/model"
+	"github.com/otfabric/s7comm/transport"
+	"github.com/otfabric/s7comm/wire"
 )
 
 // Client is an S7 protocol client
@@ -17,29 +17,25 @@ type Client struct {
 	host          string
 	opts          *options
 	conn          *transport.Conn
-	pduSize       int
+	reqMu         sync.Mutex
+	mu            sync.RWMutex
+	pduRef        uint32
 	localTSAP     uint16
 	remoteTSAP    uint16
+	pduSize       int
 	maxAmqCalling int
 	maxAmqCalled  int
-	pduRef        uint32
-	mu            sync.RWMutex
-	reqMu         sync.Mutex
 }
 
-// New creates a new S7 client
+// New creates a new S7 client for the given host
 func New(host string, opts ...Option) *Client {
 	o := defaultOptions()
-	for _, opt := range opts {
-		opt(o)
+	for _, f := range opts {
+		f(o)
 	}
-	return &Client{
-		host: host,
-		opts: o,
-	}
+	return &Client{host: host, opts: o}
 }
 
-// Connect establishes connection to the PLC
 func (c *Client) Connect(ctx context.Context) error {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
@@ -225,28 +221,16 @@ func (c *Client) nextPDURef() uint16 {
 }
 
 func (c *Client) sendReceive(ctx context.Context, req []byte) ([]byte, []byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
-
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-	if conn == nil {
-		return nil, nil, transport.ErrConnectionNotEstablished
-	}
-
 	cotp := wire.EncodeCOTPData()
 	frame := wire.EncodeTPKT(append(cotp, req...))
-
-	if err := conn.SendContext(ctx, frame); err != nil {
+	if err := c.conn.SendContext(ctx, frame); err != nil {
 		return nil, nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 
-	resp, err := conn.ReceiveContext(ctx)
+	resp, err := c.conn.ReceiveContext(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

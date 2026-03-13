@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"otfabric/s7comm/model"
-	"otfabric/s7comm/wire"
+	"github.com/otfabric/s7comm/model"
+	"github.com/otfabric/s7comm/wire"
 )
 
 const (

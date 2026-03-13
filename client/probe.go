@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"otfabric/s7comm/transport"
-	"otfabric/s7comm/wire"
+	"github.com/otfabric/s7comm/transport"
+	"github.com/otfabric/s7comm/wire"
 )
 
 // Classification values for RackSlotCandidate.

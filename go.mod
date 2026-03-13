@@ -1,3 +1,3 @@
-module otfabric/s7comm
+module github.com/otfabric/s7comm
 
 go 1.25.0

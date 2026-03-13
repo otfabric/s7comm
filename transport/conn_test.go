@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"otfabric/s7comm/wire"
+	"github.com/otfabric/s7comm/wire"
 )
 
 func TestSendReceiveWithNetPipe(t *testing.T) {

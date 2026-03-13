@@ -12,7 +12,7 @@ This document describes the public API exposed by the module and gives practical
 ## client
 
 ```go
-import "otfabric/s7comm/client"
+import "github.com/otfabric/s7comm/client"
 ```
 
 ### Construction and lifecycle
@@ -186,7 +186,7 @@ Defaults:
 ## model
 
 ```go
-import "otfabric/s7comm/model"
+import "github.com/otfabric/s7comm/model"
 ```
 
 ### Addressing and enums
@@ -273,7 +273,7 @@ Notes:
 ## transport
 
 ```go
-import "otfabric/s7comm/transport"
+import "github.com/otfabric/s7comm/transport"
 ```
 
 ```go
@@ -299,7 +299,7 @@ func (c *Conn) RemoteAddr() net.Addr
 ## wire
 
 ```go
-import "otfabric/s7comm/wire"
+import "github.com/otfabric/s7comm/wire"
 ```
 
 ### Framing and S7 headers
