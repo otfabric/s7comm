@@ -88,8 +88,7 @@ func (c *Client) autoConnect(ctx context.Context) error {
 
 func (c *Client) connectOnce(ctx context.Context, rack, slot int) error {
 	if c.conn != nil {
-		_ = c.conn.Close()
-		c.conn = nil
+		_ = c.closeConnLocked()
 	}
 
 	addr := net.JoinHostPort(c.host, fmt.Sprint(c.opts.port))
@@ -105,14 +104,14 @@ func (c *Client) connectOnce(ctx context.Context, rack, slot int) error {
 
 	// COTP connection
 	if err := c.cotpConnect(ctx); err != nil {
-		_ = c.conn.Close()
+		_ = c.closeConnLocked()
 		return fmt.Errorf("COTP connect: %w", err)
 	}
 
 	// S7 setup communication
 	setup, err := c.s7Setup(ctx)
 	if err != nil {
-		_ = c.conn.Close()
+		_ = c.closeConnLocked()
 		return fmt.Errorf("S7 setup: %w", err)
 	}
 	c.pduSize = setup.PDUSize
@@ -120,6 +119,15 @@ func (c *Client) connectOnce(ctx context.Context, rack, slot int) error {
 	c.maxAmqCalled = setup.MaxAmqCalled
 
 	return nil
+}
+
+func (c *Client) closeConnLocked() error {
+	if c.conn == nil {
+		return nil
+	}
+	err := c.conn.Close()
+	c.conn = nil
+	return err
 }
 
 func (c *Client) cotpConnect(ctx context.Context) error {
@@ -280,10 +288,7 @@ func (c *Client) Close() error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn != nil {
-		return c.conn.Close()
-	}
-	return nil
+	return c.closeConnLocked()
 }
 
 // ConnectionInfo returns info about current connection

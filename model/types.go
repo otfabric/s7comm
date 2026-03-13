@@ -7,6 +7,9 @@ import (
 
 // DecodeBool decodes a bit from byte array
 func DecodeBool(data []byte, bit int) bool {
+	if bit < 0 {
+		return false
+	}
 	if len(data) == 0 {
 		return false
 	}
@@ -112,17 +115,22 @@ func EncodeReal(val float32) []byte {
 	return EncodeDWord(math.Float32bits(val))
 }
 
-// EncodeString encodes a string as S7 format (max 254 chars)
+// EncodeString encodes a string as S7 format with a 2-byte header and up to 254 payload chars.
 func EncodeString(val string, maxLen int) []byte {
-	if maxLen > 254 {
-		maxLen = 254
+	if maxLen < 2 {
+		maxLen = 2
 	}
-	if len(val) > maxLen-2 {
-		val = val[:maxLen-2]
+	if maxLen > 256 {
+		maxLen = 256
+	}
+
+	maxChars := maxLen - 2
+	if len(val) > maxChars {
+		val = val[:maxChars]
 	}
 	buf := make([]byte, maxLen)
-	buf[0] = byte(maxLen - 2) // Max length
-	buf[1] = byte(len(val))   // Actual length
+	buf[0] = byte(maxChars) // Max length
+	buf[1] = byte(len(val)) // Actual length
 	copy(buf[2:], val)
 	return buf
 }
