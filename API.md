@@ -77,6 +77,70 @@ Default discovery settings:
 - rack range: 0..3
 - slot range: 0..5
 
+### Rack/Slot Probe API
+
+A host-oriented probe that determines which rack/slot combinations are valid for a specific target IP. Intended for pre-connection topology discovery and troubleshooting.
+
+```go
+type RackSlotProbeRequest struct {
+    Address     string
+    Port        int           // default 102
+    RackMin     int           // default 0
+    RackMax     int           // default 7
+    SlotMin     int           // default 0
+    SlotMax     int           // default 31
+    Timeout     time.Duration // per-attempt timeout; default 2s
+    Parallelism int           // concurrent probes; default 4
+    DelayMS     int           // delay between attempts in ms; default 0
+    StopOnFirst bool          // stop after first valid candidate
+
+    // optional manual TSAP override (bypasses rack/slot-derived TSAP)
+    LocalTSAP  *uint16
+    RemoteTSAP *uint16
+}
+
+type RackSlotCandidate struct {
+    Rack           int
+    Slot           int
+    ReachableTCP   bool
+    ReachableCOTP  bool
+    S7SetupOK      bool
+    SZLQueryOK     bool
+    PDUSize        int
+    LocalTSAP      uint16
+    RemoteTSAP     uint16
+    Classification string // see table below
+    Error          string
+}
+
+type RackSlotProbeResult struct {
+    Address    string
+    Candidates []RackSlotCandidate
+    Valid      []RackSlotCandidate
+}
+
+func ProbeRackSlots(ctx context.Context, req RackSlotProbeRequest) (*RackSlotProbeResult, error)
+```
+
+Classification values:
+
+| Value           | Meaning                                              |
+|-----------------|------------------------------------------------------|
+| `valid-query`   | S7 setup + benign SZL read both succeeded            |
+| `valid-connect` | S7 setup succeeded; SZL not attempted or failed      |
+| `rejected`      | COTP connected but S7 setup was rejected by the PLC  |
+| `cotp-failed`   | TCP reachable, COTP session not accepted             |
+| `tcp-only`      | TCP reachable, no recognisable COTP/S7 response      |
+| `unreachable`   | TCP connect failed                                   |
+
+Behavior notes:
+
+- A candidate is considered **valid** when `S7SetupOK` is true (Classification `valid-connect` or better).
+- `SZLQueryOK` is attempted on each valid-connect candidate using a benign SZL 0x0011 read.
+- Remote TSAP is derived from rack/slot (PG convention: `0x03RS`) unless `RemoteTSAP` override is set.
+- Parallelism is bounded per-host; candidates are collected in rack-major, slot-minor order.
+- Probe is fully non-destructive: only connection/setup and read-only SZL traffic is used.
+
 ### Identification, diagnostics, and blocks
 
 ```go

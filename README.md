@@ -69,6 +69,44 @@ results, err := client.Discover(ctx, "192.168.0.0/24",
 
 Each result reports IP/port reachability, detected rack/slot, negotiated PDU size, and TSAP.
 
+## Rack/Slot Probe
+
+Determine which rack/slot combinations are valid for a specific target before establishing a session:
+
+```go
+result, err := client.ProbeRackSlots(ctx, client.RackSlotProbeRequest{
+	Address:     "192.168.0.10",
+	Port:        102,
+	RackMin:     0,
+	RackMax:     7,
+	SlotMin:     0,
+	SlotMax:     31,
+	Timeout:     2 * time.Second,
+	Parallelism: 4,
+})
+```
+
+Each candidate in `result.Candidates` is classified at the protocol stage where it stopped:
+
+| Classification   | Meaning                                        |
+|------------------|------------------------------------------------|
+| `valid-query`    | S7 setup + benign SZL read succeeded           |
+| `valid-connect`  | S7 setup succeeded; SZL read not attempted/failed |
+| `cotp-failed`    | TCP reachable, COTP session rejected           |
+| `tcp-only`       | TCP reachable, no S7/COTP response             |
+| `unreachable`    | TCP connect failed                             |
+| `rejected`       | COTP connected, S7 setup rejected              |
+
+Use `StopOnFirst: true` to return as soon as the first valid combination is found.
+
+For CLI usage see [s7commctl probe rackslot](https://github.com/otfabric/s7commctl):
+
+```sh
+s7commctl probe rackslot --ip 192.168.0.10
+s7commctl probe rackslot --ip 192.168.0.10 --rack-min 0 --rack-max 3 --slot-min 0 --slot-max 7
+s7commctl probe rackslot --ip 192.168.0.10 --first --format json
+```
+
 ## Package Structure
 
 - `client` - High-level client API (connect, read/write, SZL, discovery, blocks)

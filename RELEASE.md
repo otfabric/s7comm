@@ -1,3 +1,20 @@
+# Release v0.2.0
+
+**Date:** 2026-03-13
+**Previous release:** v0.1.0
+
+## Summary
+
+- Added host-oriented rack/slot probe API (`ProbeRackSlots`) as a first-class public function in the `client` package.
+- New types: `RackSlotProbeRequest`, `RackSlotCandidate`, `RackSlotProbeResult` covering the full connection classification model from TCP reachability through S7 setup success.
+- Each candidate is classified as `valid-query`, `valid-connect`, `cotp-failed`, `tcp-only`, `unreachable`, or `rejected`, giving operators precise visibility into which protocol stage succeeded or failed.
+- Probe supports bounded parallelism, configurable rack/slot ranges, per-attempt delays, stop-on-first mode, and optional manual TSAP override.
+- An optional benign SZL query (SZL 0x0011) is attempted on successful candidates to elevate confidence from `valid-connect` to `valid-query`.
+- All probe logic is non-destructive: only connection and setup traffic, plus a read-only SZL request where possible.
+- Exit semantics and JSON/table output are documented for `s7commctl probe rackslot` CLI consumers.
+
+---
+
 # Release v0.1.0
 
 **Date:** 2026-03-13
