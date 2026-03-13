@@ -1,3 +1,18 @@
+# Release v0.3.0
+
+**Date:** 2026-03-13
+**Previous release:** v0.2.1
+
+## Summary
+
+- **Strict rack/slot probe mode**: `Strict: true` on `RackSlotProbeRequest` restricts "valid" to candidates that complete both S7 setup and a benign follow-up query (`valid-query`). Without strict, any setup success (`setup-only`, `valid-connect`, or `valid-query`) is valid.
+- **Confirmation strategies**: When strict, follow-up is configurable via `Confirm`: `szl` (SZL module ID), `cpu-state` (SZL CPU state), or `any` (try SZL, then CPU state, then protection). Default when `Strict` is true is `ConfirmAny`.
+- **New probe types**: `ProbeStage` (tcp, cotp, setup, query), `ProbeStatus` (unreachable, tcp-only, cotp-only, setup-only, valid-connect, valid-query, rejected, timeout, flaky), `ConfirmationKind`, and `Confidence`.
+- **Extended `RackSlotCandidate`**: `Stage`, `Status`, `ConfirmedBy`, `Confidence`; legacy fields `ReachableTCP`, `ReachableCOTP`, `S7SetupOK`, `SZLQueryOK`, `Classification` retained and derived from `Status`.
+- **Result summary**: `RackSlotProbeResult` now includes `SetupAccepted`, `ConfirmedByQuery`, `TCPOnly`, and `Flaky` for honest reporting. In strict mode only `valid-query` candidates appear in `Valid`.
+- **Backward compatibility**: Legacy classification constants and candidate fields preserved; existing callers continue to work.
+
+---
 # Release v0.2.1
 
 **Date:** 2026-03-13

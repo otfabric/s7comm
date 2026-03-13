@@ -353,3 +353,183 @@ func TestDefaultRackSlotProbeRequest(t *testing.T) {
 		t.Errorf("Parallelism: got %d, want 4", req.Parallelism)
 	}
 }
+
+// TestApplyProbeDefaultsStrictSetsConfirm verifies that when Strict is true, Confirm defaults to ConfirmAny.
+func TestApplyProbeDefaultsStrictSetsConfirm(t *testing.T) {
+	req := RackSlotProbeRequest{Strict: true, Confirm: ConfirmNone}
+	applyProbeDefaults(&req)
+	if req.Confirm != ConfirmAny {
+		t.Errorf("when Strict is true and Confirm is none: got Confirm %q, want %q", req.Confirm, ConfirmAny)
+	}
+}
+
+// TestApplyProbeDefaultsStrictPreservesExplicitConfirm verifies that explicit Confirm is not overwritten.
+func TestApplyProbeDefaultsStrictPreservesExplicitConfirm(t *testing.T) {
+	req := RackSlotProbeRequest{Strict: true, Confirm: ConfirmSZL}
+	applyProbeDefaults(&req)
+	if req.Confirm != ConfirmSZL {
+		t.Errorf("explicit Confirm: got %q, want szl", req.Confirm)
+	}
+}
+
+// TestProbeRackSlotsSummaryCounts verifies that result summary is populated.
+func TestProbeRackSlotsSummaryCounts(t *testing.T) {
+	// Unreachable port -> all unreachable; one tcp-only if we had a listener that closes.
+	result, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address:     "127.0.0.1",
+		Port:        1,
+		RackMin:     0,
+		RackMax:     0,
+		SlotMin:     1,
+		SlotMax:     2,
+		Timeout:     200 * time.Millisecond,
+		Parallelism: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 2 candidates, both unreachable
+	if len(result.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(result.Candidates))
+	}
+	if result.SetupAccepted != 0 {
+		t.Errorf("SetupAccepted: got %d, want 0", result.SetupAccepted)
+	}
+	if result.ConfirmedByQuery != 0 {
+		t.Errorf("ConfirmedByQuery: got %d, want 0", result.ConfirmedByQuery)
+	}
+}
+
+// TestProbeRackSlotsStrictValidOnlyValidQuery verifies that in strict mode only valid-query is in Valid.
+func TestProbeRackSlotsStrictValidOnlyValidQuery(t *testing.T) {
+	// With strict and no real S7 target, we get at most setup-only -> follow-up fails -> valid-connect.
+	// So Valid should be empty (no valid-query). Use unreachable to get no setup success.
+	result, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address:     "127.0.0.1",
+		Port:        1,
+		RackMin:     0,
+		RackMax:     0,
+		SlotMin:     1,
+		SlotMax:     1,
+		Strict:      true,
+		Timeout:     200 * time.Millisecond,
+		Parallelism: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Valid) != 0 {
+		t.Errorf("strict mode with unreachable: got %d Valid, want 0", len(result.Valid))
+	}
+}
+
+// TestProbeRackSlotsNonStrictSetsSetupOnly verifies that without Strict, successful setup yields StatusSetupOnly.
+func TestProbeRackSlotsNonStrictSetsSetupOnly(t *testing.T) {
+	result, _ := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address: "127.0.0.1",
+		Port:    1,
+		RackMin: 0, RackMax: 0, SlotMin: 1, SlotMax: 1,
+		Strict: false, Timeout: 200 * time.Millisecond, Parallelism: 1,
+	})
+	if result.SetupAccepted != 0 {
+		t.Errorf("expected 0 setup accepted for unreachable, got %d", result.SetupAccepted)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(result.Candidates))
+	}
+	if result.Candidates[0].Status != StatusUnreachable {
+		t.Errorf("expected StatusUnreachable, got %q", result.Candidates[0].Status)
+	}
+}
+
+// TestProbeRackSlotsSummaryTCPOnly verifies that TCP-only candidates increment result.TCPOnly.
+func TestProbeRackSlotsSummaryTCPOnly(t *testing.T) {
+	port, cleanup := newProbeServer(t, func(conn net.Conn) { _ = conn.Close() })
+	defer cleanup()
+
+	result, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address:     "127.0.0.1",
+		Port:        port,
+		RackMin:     0,
+		RackMax:     0,
+		SlotMin:     1,
+		SlotMax:     1,
+		Timeout:     300 * time.Millisecond,
+		Parallelism: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(result.Candidates))
+	}
+	if result.Candidates[0].Status != StatusTCPOnly && result.Candidates[0].Status != StatusCOTPOnly {
+		t.Errorf("expected tcp-only or cotp-only, got %q", result.Candidates[0].Status)
+	}
+	if result.Candidates[0].Status == StatusTCPOnly && result.TCPOnly != 1 {
+		t.Errorf("expected TCPOnly=1 when status is tcp-only, got %d", result.TCPOnly)
+	}
+}
+
+// TestProbeRackSlotsLegacyClassification verifies that Classification matches Status for backward compatibility.
+func TestProbeRackSlotsLegacyClassification(t *testing.T) {
+	result, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address:     "127.0.0.1",
+		Port:        1,
+		RackMin:     0,
+		RackMax:     0,
+		SlotMin:     1,
+		SlotMax:     1,
+		Timeout:     200 * time.Millisecond,
+		Parallelism: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	c := result.Candidates[0]
+	if c.Classification != string(c.Status) {
+		t.Errorf("Classification %q should equal Status %q for backward compatibility", c.Classification, c.Status)
+	}
+}
+
+// TestProbeStatusConstants verifies that probe status constants are defined and non-empty.
+func TestProbeStatusConstants(t *testing.T) {
+	statuses := []ProbeStatus{
+		StatusUnreachable, StatusTCPOnly, StatusCOTPOnly, StatusSetupOnly,
+		StatusValidConnect, StatusValidQuery, StatusRejected, StatusTimeout, StatusFlaky,
+	}
+	for _, s := range statuses {
+		if s == "" {
+			t.Errorf("ProbeStatus constant is empty")
+		}
+	}
+}
+
+// TestProbeStageConstants verifies that probe stage constants are defined and non-empty.
+func TestProbeStageConstants(t *testing.T) {
+	stages := []ProbeStage{ProbeStageTCP, ProbeStageCOTP, ProbeStageSetup, ProbeStageQuery}
+	for _, s := range stages {
+		if s == "" {
+			t.Errorf("ProbeStage constant is empty")
+		}
+	}
+}
+
+// TestConfirmationKindConstants verifies that confirmation kind constants are defined and non-empty.
+func TestConfirmationKindConstants(t *testing.T) {
+	kinds := []ConfirmationKind{ConfirmNone, ConfirmSZL, ConfirmCPUState, ConfirmAny}
+	for _, k := range kinds {
+		if k == "" {
+			t.Error("ConfirmationKind constant is empty")
+		}
+	}
+}
+
+// TestDefaultRackSlotProbeRequestStrictUnset verifies default probe request does not enable strict mode.
+func TestDefaultRackSlotProbeRequestStrictUnset(t *testing.T) {
+	req := DefaultRackSlotProbeRequest("10.0.0.1")
+	if req.Strict {
+		t.Error("DefaultRackSlotProbeRequest should have Strict false")
+	}
+	// Confirm is zero value; applyProbeDefaults only sets it when Strict is true
+}

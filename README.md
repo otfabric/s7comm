@@ -71,7 +71,7 @@ Each result reports IP/port reachability, detected rack/slot, negotiated PDU siz
 
 ## Rack/Slot Probe
 
-Determine which rack/slot combinations are valid for a specific target before establishing a session:
+Probe a target for accepted rack/slot combinations:
 
 ```go
 result, err := client.ProbeRackSlots(ctx, client.RackSlotProbeRequest{
@@ -86,25 +86,49 @@ result, err := client.ProbeRackSlots(ctx, client.RackSlotProbeRequest{
 })
 ```
 
-Each candidate in `result.Candidates` is classified at the protocol stage where it stopped:
+Each candidate has a `Status` and `Stage`. Without `Strict`, "valid" means setup was accepted (`setup-only`, `valid-connect`, or `valid-query`). With **strict mode** (`Strict: true`), "valid" means only **valid-query**: setup succeeded and a benign follow-up S7 query (e.g. SZL or CPU state) also succeeded. This avoids false positives from permissive gateways or simulators that accept setup but do not map to a real CPU.
 
-| Classification   | Meaning                                        |
-|------------------|------------------------------------------------|
-| `valid-query`    | S7 setup + benign SZL read succeeded           |
-| `valid-connect`  | S7 setup succeeded; SZL read not attempted/failed |
-| `cotp-failed`    | TCP reachable, COTP session rejected           |
-| `tcp-only`       | TCP reachable, no S7/COTP response             |
-| `unreachable`    | TCP connect failed                             |
-| `rejected`       | COTP connected, S7 setup rejected              |
+Strict mode with default confirmation (try SZL, then CPU state, then protection):
 
-Use `StopOnFirst: true` to return as soon as the first valid combination is found.
+```go
+result, err := client.ProbeRackSlots(ctx, client.RackSlotProbeRequest{
+	Address: "192.168.0.10",
+	Port:    102,
+	Strict:  true,  // equivalent to Confirm: client.ConfirmAny
+})
+```
+
+Use a specific confirmation strategy:
+
+```go
+result, err := client.ProbeRackSlots(ctx, client.RackSlotProbeRequest{
+	Address:  "192.168.0.10",
+	Strict:   true,
+	Confirm:  client.ConfirmSZL,  // or ConfirmCPUState, ConfirmAny
+})
+```
+
+The result exposes summary counts: **SetupAccepted**, **ConfirmedByQuery**, and **TCPOnly**. In strict mode only candidates with `valid-query` are included in `result.Valid`.
+
+| Status           | Meaning                                                         |
+|------------------|------------------------------------------------------------------|
+| `valid-query`    | Setup ok and follow-up query succeeded (strongest)               |
+| `valid-connect`  | Setup ok; follow-up failed or not attempted                     |
+| `setup-only`     | Setup ok; no follow-up (non-strict only)                         |
+| `cotp-only`      | COTP ok, S7 setup failed                                         |
+| `tcp-only`       | TCP ok, COTP failed                                             |
+| `unreachable`    | TCP connect failed                                              |
+| `rejected`       | Target rejected (S7 error)                                      |
+
+Use `StopOnFirst: true` to stop after the first valid combination; in strict mode that means the first `valid-query`.
 
 For CLI usage see [s7commctl probe rackslot](https://github.com/otfabric/s7commctl):
 
 ```sh
 s7commctl probe rackslot --ip 192.168.0.10
-s7commctl probe rackslot --ip 192.168.0.10 --rack-min 0 --rack-max 3 --slot-min 0 --slot-max 7
-s7commctl probe rackslot --ip 192.168.0.10 --first --format json
+s7commctl probe rackslot --ip 192.168.0.10 --strict
+s7commctl probe rackslot --ip 192.168.0.10 --confirm szl
+s7commctl probe rackslot --ip 192.168.0.10 --strict --first-confirmed
 ```
 
 ## Package Structure

@@ -81,7 +81,49 @@ Default discovery settings:
 
 A host-oriented probe that determines which rack/slot combinations are valid for a specific target IP. Intended for pre-connection topology discovery and troubleshooting.
 
+**Strict mode** (`Strict: true`): only candidates that complete both S7 setup and a benign follow-up query are considered valid (`valid-query`). This avoids false positives from permissive gateways or simulators that accept setup but do not map to a real CPU. Without strict mode, any candidate that reaches setup success (`setup-only`, `valid-connect`, or `valid-query`) is valid.
+
 ```go
+type ProbeStage string
+
+const (
+    ProbeStageTCP   ProbeStage = "tcp"
+    ProbeStageCOTP  ProbeStage = "cotp"
+    ProbeStageSetup ProbeStage = "setup"
+    ProbeStageQuery ProbeStage = "query"
+)
+
+type ProbeStatus string
+
+const (
+    StatusUnreachable   ProbeStatus = "unreachable"
+    StatusTCPOnly       ProbeStatus = "tcp-only"
+    StatusCOTPOnly      ProbeStatus = "cotp-only"
+    StatusSetupOnly     ProbeStatus = "setup-only"
+    StatusValidConnect  ProbeStatus = "valid-connect"
+    StatusValidQuery    ProbeStatus = "valid-query"
+    StatusRejected      ProbeStatus = "rejected"
+    StatusTimeout       ProbeStatus = "timeout"
+    StatusFlaky         ProbeStatus = "flaky"
+)
+
+type ConfirmationKind string
+
+const (
+    ConfirmNone     ConfirmationKind = "none"
+    ConfirmSZL      ConfirmationKind = "szl"
+    ConfirmCPUState ConfirmationKind = "cpu-state"
+    ConfirmAny      ConfirmationKind = "any"
+)
+
+type Confidence string
+
+const (
+    ConfidenceNone Confidence = "none"
+    ConfidenceLow  Confidence = "low"
+    ConfidenceHigh Confidence = "high"
+)
+
 type RackSlotProbeRequest struct {
     Address     string
     Port        int           // default 102
@@ -94,52 +136,71 @@ type RackSlotProbeRequest struct {
     DelayMS     int           // delay between attempts in ms; default 0
     StopOnFirst bool          // stop after first valid candidate
 
-    // optional manual TSAP override (bypasses rack/slot-derived TSAP)
     LocalTSAP  *uint16
     RemoteTSAP *uint16
+
+    Strict  bool            // if true, only valid-query counts as valid; run follow-up
+    Confirm ConfirmationKind // when Strict: szl | cpu-state | any (default when Strict: any)
+    Retries int             // reserved for Phase 2
+    RetryDelay time.Duration
+    StopOnFirstConfirmed bool
 }
 
 type RackSlotCandidate struct {
-    Rack           int
-    Slot           int
-    ReachableTCP   bool
-    ReachableCOTP  bool
-    S7SetupOK      bool
-    SZLQueryOK     bool
-    PDUSize        int
-    LocalTSAP      uint16
-    RemoteTSAP     uint16
-    Classification string // see table below
-    Error          string
+    Rack         int
+    Slot         int
+    LocalTSAP    uint16
+    RemoteTSAP   uint16
+    Stage        ProbeStage
+    Status       ProbeStatus
+    PDUSize      int
+    ConfirmedBy  ConfirmationKind
+    Confidence   Confidence
+    Error        string
+    // Legacy (derived from Status): ReachableTCP, ReachableCOTP, S7SetupOK, SZLQueryOK, Classification
 }
 
 type RackSlotProbeResult struct {
-    Address    string
-    Candidates []RackSlotCandidate
-    Valid      []RackSlotCandidate
+    Address          string
+    Candidates       []RackSlotCandidate
+    Valid            []RackSlotCandidate
+    SetupAccepted    int // candidates that reached setup success
+    ConfirmedByQuery int // candidates with valid-query
+    Flaky            int // reserved
+    TCPOnly          int
 }
 
 func ProbeRackSlots(ctx context.Context, req RackSlotProbeRequest) (*RackSlotProbeResult, error)
+func DefaultRackSlotProbeRequest(address string) RackSlotProbeRequest
 ```
 
-Classification values:
+Status values:
 
-| Value           | Meaning                                              |
-|-----------------|------------------------------------------------------|
-| `valid-query`   | S7 setup + benign SZL read both succeeded            |
-| `valid-connect` | S7 setup succeeded; SZL not attempted or failed      |
-| `rejected`      | COTP connected but S7 setup was rejected by the PLC  |
-| `cotp-failed`   | TCP reachable, COTP session not accepted             |
-| `tcp-only`      | TCP reachable, no recognisable COTP/S7 response      |
-| `unreachable`   | TCP connect failed                                   |
+| Status           | Meaning                                                |
+|------------------|--------------------------------------------------------|
+| `valid-query`    | S7 setup and follow-up query both succeeded            |
+| `valid-connect`  | S7 setup succeeded; follow-up failed or not attempted |
+| `setup-only`     | S7 setup succeeded; no follow-up (non-strict only)     |
+| `cotp-only`      | COTP ok, S7 setup failed                                |
+| `tcp-only`       | TCP ok, COTP failed                                    |
+| `unreachable`    | TCP connect failed                                     |
+| `rejected`       | Target rejected (S7 error)                             |
+| `timeout`        | Any stage timed out (reserved)                          |
+| `flaky`          | Retries produced mixed results (reserved)              |
+
+Confirmation strategies (when `Strict` is true):
+
+- `ConfirmSZL`: one SZL read (module ID).
+- `ConfirmCPUState`: SZL CPU state.
+- `ConfirmAny`: try SZL module ID, then CPU state, then protection; first success sets `ConfirmedBy`.
 
 Behavior notes:
 
-- A candidate is considered **valid** when `S7SetupOK` is true (Classification `valid-connect` or better).
-- `SZLQueryOK` is attempted on each valid-connect candidate using a benign SZL 0x0011 read.
-- Remote TSAP is derived from rack/slot (PG convention: `0x03RS`) unless `RemoteTSAP` override is set.
-- Parallelism is bounded per-host; candidates are collected in rack-major, slot-minor order.
-- Probe is fully non-destructive: only connection/setup and read-only SZL traffic is used.
+- **Valid list**: without `Strict`, `Valid` contains candidates with status `setup-only`, `valid-connect`, or `valid-query`. With `Strict`, `Valid` contains only `valid-query`.
+- When `Strict` is true and `Confirm` is zero, `Confirm` is set to `ConfirmAny` in `applyProbeDefaults`.
+- Legacy fields `ReachableTCP`, `ReachableCOTP`, `S7SetupOK`, `SZLQueryOK`, and `Classification` are populated from `Status` for backward compatibility.
+- Remote TSAP is derived from rack/slot (PG convention: `0x03RS`) unless `RemoteTSAP` is set.
+- Probe is non-destructive: only connection, setup, and read-only follow-up traffic.
 
 ### Identification, diagnostics, and blocks
 
