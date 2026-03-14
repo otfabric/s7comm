@@ -1,6 +1,6 @@
 module github.com/otfabric/s7comm
 
-go 1.25.0
+go 1.22
 
 require (
 	github.com/otfabric/go-cotp v0.1.2

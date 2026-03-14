@@ -1,6 +1,6 @@
 # otfabric/s7comm - Siemens S7 Protocol Library for Go
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/otfabric/s7comm)](https://goreportcard.com/report/github.com/otfabric/s7comm)
 [![CI](https://github.com/otfabric/s7comm/actions/workflows/test.yml/badge.svg)](https://github.com/otfabric/s7comm/actions/workflows/test.yml)
@@ -38,7 +38,7 @@ Context cancellation is only strongly effective when the context has a deadline;
 go get github.com/otfabric/s7comm
 ```
 
-Requires Go 1.25 or later.
+Requires Go 1.22 or later.
 
 ## Quickstart
 
