@@ -1,3 +1,22 @@
+# Release v0.5.1
+
+**Date:** 2026-03-13
+**Previous release:** v0.5.0
+
+## Summary
+
+- **Test coverage**: Raised from ~32% to **≥75%** (patch release focused on tests and one small client fix).
+- **model**: Added tests for all `Decode*`/`Encode*` (Byte, Int, DInt, Real, Bool, Word, DWord, etc.), short-buffer behaviour, and full `Area`/`BlockType`/`BlockLang` `String()` branches.
+- **wire**: New or extended tests for setup (Encode/Parse SetupComm), errors (`S7Error`, `NewS7Error`, `ReturnCodeError`), SZL (Encode/Parse, error paths), block list (EncodeBlockListRequest, ParseBlockListResponse), upload (EncodeStartUploadRequest, EncodeUploadRequest, EncodeEndUploadRequest, ParseStartUploadResponse invalid), read/write (EncodeWriteVarRequest, ParseWriteVarResponse branches), and S7 header (ParseS7Header ack, too short, payload length error).
+- **transport**: Tests for Send, SendContext, Close, LocalAddr, RemoteAddr, SetTracer; SendContext/ReceiveContext with cancelled context; real TCP for addr and close.
+- **client**: Fake TCP server tests for Connect, ReadDB/ReadInputs/ReadMerkers/WriteDB, Identify, GetCPUState, GetProtectionLevel, ReadDiagBuffer, ProbeReadableRanges (with Repeat), and rate limit. Standalone tests for ReadArea outcomes: empty, rejected, short-read, protocol error, zero items; not-connected and context-cancelled. CompareRead tests (two candidates, same/different data). Probe tests: setup-only (non-strict), strict with SZL, strict with CPU state. Options tests (WithTSAP, WithAutoRackSlot, WithRateLimit, WithLogger, WithMaxPDU). Discover (options, expandCIDR /31). Read/write error-path tests (not connected, context cancelled).
+- **Client fix**: `sendReceive` now checks for nil connection and returns `errors.New("not connected")` instead of panicking when the client is not connected.
+
+## Breaking changes
+
+- None.
+
+---
 # Release v0.5.0
 
 **Date:** 2026-03-13

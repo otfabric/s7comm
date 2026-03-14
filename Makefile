@@ -12,7 +12,7 @@ all: ## Format, vet, and test
 	@echo "Running all: fmt, vet, test"
 	@$(MAKE) fmt vet test
 
-check: fmt lint lint-ci vet test ## Run all checks
+check: fmt lint lint-ci vet test coverage ## Run all checks
 
 test: ## Run unit tests with race detector
 	@echo "Running tests"

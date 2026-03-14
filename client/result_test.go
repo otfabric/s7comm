@@ -68,6 +68,7 @@ func TestClassifyReadOutcome(t *testing.T) {
 		want                ReadStatus
 	}{
 		{0, 0, ReadStatusSuccess},
+		{0, 5, ReadStatusSuccess}, // requested<=0: success regardless of returned
 		{10, 10, ReadStatusSuccess},
 		{10, 0, ReadStatusEmptyRead},
 		{10, 5, ReadStatusShortRead},

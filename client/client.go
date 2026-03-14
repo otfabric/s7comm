@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -217,18 +218,24 @@ func (c *Client) nextPDURef() uint16 {
 }
 
 func (c *Client) sendReceive(ctx context.Context, req []byte) ([]byte, []byte, error) {
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn == nil {
+		return nil, nil, errors.New("not connected")
+	}
 	dtBytes, err := wire.EncodeCOTPDT(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode COTP DT: %w", err)
 	}
-	if err := c.conn.SendContext(ctx, dtBytes); err != nil {
+	if err := conn.SendContext(ctx, dtBytes); err != nil {
 		return nil, nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 
-	resp, err := c.conn.ReceiveContext(ctx)
+	resp, err := conn.ReceiveContext(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

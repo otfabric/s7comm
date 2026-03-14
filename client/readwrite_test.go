@@ -1,9 +1,46 @@
 package client
 
 import (
+	"context"
 	"reflect"
 	"testing"
+
+	"github.com/otfabric/s7comm/model"
 )
+
+func TestReadAreaNotConnected(t *testing.T) {
+	c := New("host")
+	ctx := context.Background()
+	_, err := c.ReadArea(ctx, model.Address{Area: model.AreaDB, DBNumber: 1, Start: 0, Size: 4})
+	if err == nil {
+		t.Fatal("ReadArea without connection should return error")
+	}
+	if err.Error() != "not connected" {
+		t.Errorf("expected 'not connected', got %q", err.Error())
+	}
+}
+
+func TestWriteAreaNotConnected(t *testing.T) {
+	c := New("host")
+	ctx := context.Background()
+	err := c.WriteArea(ctx, model.Address{Area: model.AreaDB, DBNumber: 1, Start: 0, Size: 2}, []byte{0x01, 0x02})
+	if err == nil {
+		t.Fatal("WriteArea without connection should return error")
+	}
+	if err.Error() != "not connected" {
+		t.Errorf("expected 'not connected', got %q", err.Error())
+	}
+}
+
+func TestReadAreaContextCancelled(t *testing.T) {
+	c := New("host")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.ReadArea(ctx, model.Address{Area: model.AreaDB, DBNumber: 1, Start: 0, Size: 4})
+	if err == nil {
+		t.Fatal("ReadArea with cancelled context should return error")
+	}
+}
 
 func TestPlanReadChunks(t *testing.T) {
 	got := planReadChunks(20, 6)

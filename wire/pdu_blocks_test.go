@@ -1,6 +1,57 @@
 package wire
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
+
+func TestEncodeBlockListRequest(t *testing.T) {
+	msg := EncodeBlockListRequest(1, BlockTypeDB)
+	if len(msg) < 10 {
+		t.Fatalf("expected SZL request length >= 10, got %d", len(msg))
+	}
+	// Default/unknown block type
+	msg0 := EncodeBlockListRequest(1, 0)
+	if len(msg0) < 10 {
+		t.Fatalf("EncodeBlockListRequest(0): got %d bytes", len(msg0))
+	}
+	// All block types
+	for _, bt := range []byte{BlockTypeOB, BlockTypeDB, BlockTypeSDB, BlockTypeFC, BlockTypeSFC, BlockTypeFB, BlockTypeSFB} {
+		m := EncodeBlockListRequest(1, bt)
+		if len(m) < 10 {
+			t.Errorf("EncodeBlockListRequest(0x%02X): got %d bytes", bt, len(m))
+		}
+	}
+}
+
+func TestParseBlockListResponse(t *testing.T) {
+	// Two entries: block 1 type DB, block 2 type FC
+	data := make([]byte, 8)
+	binary.BigEndian.PutUint16(data[0:2], 1)
+	data[2] = BlockTypeDB
+	data[3] = 0x51 // lang + flags
+	binary.BigEndian.PutUint16(data[4:6], 2)
+	data[6] = BlockTypeFC
+	data[7] = 0x00
+	entries, err := ParseBlockListResponse(data)
+	if err != nil {
+		t.Fatalf("ParseBlockListResponse: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].BlockNumber != 1 || entries[0].BlockType != BlockTypeDB {
+		t.Errorf("entry 0: %+v", entries[0])
+	}
+	if entries[1].BlockNumber != 2 || entries[1].BlockType != BlockTypeFC {
+		t.Errorf("entry 1: %+v", entries[1])
+	}
+	// Empty data
+	empty, _ := ParseBlockListResponse(nil)
+	if len(empty) != 0 {
+		t.Errorf("expected 0 entries for nil, got %d", len(empty))
+	}
+}
 
 func TestParseStartUploadResponse(t *testing.T) {
 	param := []byte{FuncUploadStart, 0, 0, 0, 0, 0, 0, 0, 4, 'A', 'B', 'C', 'D'}
@@ -25,5 +76,44 @@ func TestParseUploadResponse(t *testing.T) {
 	}
 	if len(chunk.Data) != 2 {
 		t.Fatalf("unexpected chunk length: %d", len(chunk.Data))
+	}
+}
+
+func TestEncodeStartUploadRequest(t *testing.T) {
+	msg := EncodeStartUploadRequest(1, BlockTypeDB, 42)
+	if len(msg) < 20 {
+		t.Fatalf("expected request length >= 20, got %d", len(msg))
+	}
+	if msg[10] != FuncUploadStart {
+		t.Fatalf("expected FuncUploadStart at param start")
+	}
+}
+
+func TestEncodeUploadRequest(t *testing.T) {
+	msg := EncodeUploadRequest(1, "sess1")
+	if len(msg) < 10 {
+		t.Fatalf("expected request length >= 10, got %d", len(msg))
+	}
+	if msg[10] != FuncUpload {
+		t.Fatalf("expected FuncUpload at param start")
+	}
+}
+
+func TestEncodeEndUploadRequest(t *testing.T) {
+	msg := EncodeEndUploadRequest(1, "sess1")
+	if len(msg) < 10 {
+		t.Fatalf("expected request length >= 10, got %d", len(msg))
+	}
+	if msg[10] != FuncUploadEnd {
+		t.Fatalf("expected FuncUploadEnd at param start")
+	}
+}
+
+func TestParseStartUploadResponseInvalid(t *testing.T) {
+	if _, err := ParseStartUploadResponse([]byte{0x00}); err == nil {
+		t.Fatal("expected error for short param")
+	}
+	if _, err := ParseStartUploadResponse([]byte{FuncUpload, 0, 0, 0, 0, 0, 0, 0, 0}); err == nil {
+		t.Fatal("expected error for zero id length")
 	}
 }

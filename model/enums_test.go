@@ -3,29 +3,45 @@ package model
 import "testing"
 
 func TestAreaString(t *testing.T) {
-	if AreaInputs.String() != "I" {
-		t.Fatalf("unexpected area string for inputs: %q", AreaInputs.String())
+	tests := map[Area]string{
+		AreaInputs:  "I",
+		AreaOutputs: "Q",
+		AreaMerkers: "M",
+		AreaDB:      "DB",
+		AreaCounter: "C",
+		AreaTimer:   "T",
+		Area(0xFF):  "?",
 	}
-	if Area(0xFF).String() != "?" {
-		t.Fatalf("unexpected fallback area string: %q", Area(0xFF).String())
+	for area, want := range tests {
+		if got := area.String(); got != want {
+			t.Errorf("Area(%#x).String() = %q, want %q", area, got, want)
+		}
 	}
 }
 
 func TestBlockTypeString(t *testing.T) {
-	if BlockDB.String() != "DB" {
-		t.Fatalf("unexpected block type string: %q", BlockDB.String())
+	tests := map[BlockType]string{
+		BlockOB: "OB", BlockDB: "DB", BlockSDB: "SDB", BlockFC: "FC",
+		BlockSFC: "SFC", BlockFB: "FB", BlockSFB: "SFB",
+		BlockType(0x00): "?",
 	}
-	if BlockType(0x00).String() != "?" {
-		t.Fatalf("unexpected unknown block type string: %q", BlockType(0x00).String())
+	for bt, want := range tests {
+		if got := bt.String(); got != want {
+			t.Errorf("BlockType(%#x).String() = %q, want %q", bt, got, want)
+		}
 	}
 }
 
 func TestBlockLangString(t *testing.T) {
-	if BlockLangGraph.String() != "GRAPH" {
-		t.Fatalf("unexpected block language string: %q", BlockLangGraph.String())
+	tests := map[BlockLang]string{
+		BlockLangAWL: "AWL", BlockLangKOP: "KOP", BlockLangFUP: "FUP",
+		BlockLangSCL: "SCL", BlockLangDB: "DB", BlockLangGraph: "GRAPH",
+		BlockLang(0xFF): "?",
 	}
-	if BlockLang(0xFF).String() != "?" {
-		t.Fatalf("unexpected unknown block language string: %q", BlockLang(0xFF).String())
+	for bl, want := range tests {
+		if got := bl.String(); got != want {
+			t.Errorf("BlockLang(%#x).String() = %q, want %q", bl, got, want)
+		}
 	}
 }
 
