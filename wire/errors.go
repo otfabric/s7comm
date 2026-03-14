@@ -27,6 +27,21 @@ const (
 	ErrClassAccess   = 0x87
 )
 
+// ErrClassString returns a short display name for the S7 header error class only (e.g. "Access error").
+func ErrClassString(class byte) string {
+	if s, ok := errClassNames[class]; ok {
+		return s
+	}
+	return fmt.Sprintf("class 0x%02X", class)
+}
+
+var errClassNames = map[byte]string{
+	ErrClassNoError: "No error", ErrClassApp: "Application relationship",
+	ErrClassObject: "Object definition", ErrClassResource: "No resources available",
+	ErrClassService: "Error on service processing", ErrClassSupplies: "Error on supplies",
+	ErrClassAccess: "Access error",
+}
+
 // Return codes for Read/Write operations
 const (
 	RetCodeSuccess       = 0xFF // Success
@@ -58,6 +73,17 @@ func (e *S7Error) Error() string {
 func NewS7Error(class, code byte) *S7Error {
 	msg := HeaderErrorString(class, code)
 	return &S7Error{Class: class, Code: code, Message: msg}
+}
+
+// NewS7ErrorWithParam is like NewS7Error but when param contains a 16-bit parameter error code at the
+// standard offset (bytes 2-3), uses ParamErrorCodeString for the message when that code is non-zero.
+// This yields clearer errors (e.g. "block not found", "invalid request length") for block/upload/diagnostic responses.
+func NewS7ErrorWithParam(class, code byte, param []byte) *S7Error {
+	e := NewS7Error(class, code)
+	if paramCode, ok := ParamErrorFromParam(param); ok && paramCode != 0 {
+		e.Message = ParamErrorCodeString(paramCode)
+	}
+	return e
 }
 
 // HeaderErrorString returns a human-readable string for S7 header error class/code.

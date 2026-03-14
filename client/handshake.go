@@ -82,7 +82,7 @@ func performS7Setup(ctx context.Context, conn *transport.Conn, pduRef uint16, ma
 		return nil, &PDURefMismatchError{Expected: pduRef, Got: header.PDURef}
 	}
 	if header.ErrorClass != 0 || header.ErrorCode != 0 {
-		return nil, wire.NewS7Error(header.ErrorClass, header.ErrorCode)
+		return nil, wire.NewS7ErrorWithParam(header.ErrorClass, header.ErrorCode, paramData)
 	}
 	if len(paramData) > 0 && paramData[0] != wire.FuncSetupComm {
 		return nil, fmt.Errorf("S7 setup response: expected function 0x%02X, got 0x%02X: %w", wire.FuncSetupComm, paramData[0], ErrProtocolFailure)

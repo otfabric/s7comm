@@ -44,6 +44,22 @@ const (
 	FuncPLCControl    = 0x28
 )
 
+// FunctionCodeString returns a display name for the S7 parameter function code (e.g. "Read Var", "Upload").
+func FunctionCodeString(code byte) string {
+	if s, ok := functionCodeNames[code]; ok {
+		return s
+	}
+	return fmt.Sprintf("0x%02X", code)
+}
+
+var functionCodeNames = map[byte]string{
+	0x00: "CPU services", 0x01: "Mode transition",
+	FuncSetupComm: "Setup communication", FuncReadVar: "Read Var", FuncWriteVar: "Write Var",
+	FuncDownloadStart: "Request download", FuncDownload: "Download block", FuncDownloadEnd: "Download ended",
+	FuncUploadStart: "Start upload", FuncUpload: "Upload", FuncUploadEnd: "End upload",
+	FuncPIService: "PI-Service", FuncPLCStop: "PLC Stop",
+}
+
 // S7Header represents an S7 protocol header. All fields are raw wire values.
 type S7Header struct {
 	ProtocolID   byte   // Always 0x32

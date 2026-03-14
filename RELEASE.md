@@ -1,3 +1,22 @@
+# Release v0.6.2
+
+**Date:** 2026-03-13
+**Previous release:** v0.6.1
+
+## Summary
+
+- **Parameter-level error codes**: `wire.ParamErrorFromParam` and `wire.ParamErrorCodeString` for 16-bit S7 parameter error codes; `wire.NewS7ErrorWithParam` uses the param section when present so responses report clearer messages (e.g. "block not found", "invalid request length"). Client and handshake use it when header error and param are available.
+- **Response transport sizes**: Extended to DATE, TOD, TIME, S5TIME, DT (9–12, 15), COUNTER/TIMER (28, 29), and IEC counter/timer (30, 31), HS counter (32). `NormalizeResponseDataLength` handles all; `ResponseTransportSize` constants and `String()` for diagnostics.
+- **Memory areas**: `AreaDataRecord` (0x01), `AreaS7200AO` (0x07), `AreaIECCounter200` (30), `AreaIECTimer200` (31); `ValidateArea` accepts them.
+- **Diagnostic string helpers**: `wire.FunctionCodeString(code)` (e.g. "Read Var", "Upload"), `wire.AreaString(area)` (e.g. "I", "DB", "M"), `wire.SyntaxIDString(syntax)` (e.g. "S7ANY", "DBREAD"), `wire.ErrClassString(class)` (e.g. "Access error"); `ResponseTransportSize.String()` for item-level logging.
+- **SZL ID catalog**: `wire.SZLIDString(id)` and expanded `szlIDNames` for diagnostics and logging.
+- **Param error and SZL maps**: More 16-bit parameter error codes (D003–D00B, D016–D017, D043–D04A, D061–D063, D081–D082, D0A1–D0AE, D0C1–D0C2, D250–D252, D2A1–D2A4, D401–D402, D601–D602) and additional SZL IDs in the name maps.
+
+## Breaking changes
+
+- None.
+
+---
 # Release v0.6.0
 
 **Date:** 2026-03-13

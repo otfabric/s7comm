@@ -103,3 +103,15 @@ func FuzzParseSZLResponse(f *testing.F) {
 		_, _ = ParseSZLResponse(data)
 	})
 }
+
+func TestSZLIDString(t *testing.T) {
+	if got := SZLIDString(SZLModuleID); got != "Module identification" {
+		t.Errorf("SZLIDString(0x0011): got %q", got)
+	}
+	if got := SZLIDString(SZLCPUState); got != "Current mode transition" {
+		t.Errorf("SZLIDString(0x0424): got %q", got)
+	}
+	if got := SZLIDString(0x9999); got != "SZL 0x9999" {
+		t.Errorf("SZLIDString(unknown): got %q", got)
+	}
+}

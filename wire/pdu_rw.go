@@ -8,19 +8,23 @@ import (
 
 // S7 Area codes (classic subset). C and T are timer/counter, not generic byte/bit addresses.
 const (
-	AreaSysInfo    = 0x03
-	AreaSysFlags   = 0x05
-	AreaS7200AN    = 0x06
-	AreaInputs     = 0x81 // I
-	AreaOutputs    = 0x82 // Q
-	AreaMerkers    = 0x83 // M
-	AreaDB         = 0x84 // DB
-	AreaDI         = 0x85 // DI (instance DB)
-	AreaLocal      = 0x86
-	AreaV          = 0x87
-	AreaCounter    = 0x1C // C (counter)
-	AreaTimer      = 0x1D // T (timer)
-	AreaPeripheral = 0x80 // P
+	AreaDataRecord    = 0x01 // Data record (optional; not all targets)
+	AreaSysInfo       = 0x03
+	AreaSysFlags      = 0x05
+	AreaS7200AN       = 0x06 // Analog in 200
+	AreaS7200AO       = 0x07 // Analog out 200 (S7-200 style)
+	AreaInputs        = 0x81 // I
+	AreaOutputs       = 0x82 // Q
+	AreaMerkers       = 0x83 // M
+	AreaDB            = 0x84 // DB
+	AreaDI            = 0x85 // DI (instance DB)
+	AreaLocal         = 0x86
+	AreaV             = 0x87
+	AreaCounter       = 0x1C // C (counter)
+	AreaTimer         = 0x1D // T (timer)
+	AreaIECCounter200 = 30   // IEC counters (S7-200 family)
+	AreaIECTimer200   = 31   // IEC timers (S7-200 family)
+	AreaPeripheral    = 0x80 // P
 )
 
 // Syntax IDs for variable specification. Only S7Any is supported for encoding.
@@ -56,12 +60,45 @@ func ValidateRequestSyntax(syntax byte) error {
 // ValidateArea returns nil for supported classic areas, S7Error for unsupported.
 func ValidateArea(area byte) error {
 	switch area {
-	case AreaInputs, AreaOutputs, AreaMerkers, AreaDB, AreaDI, AreaLocal, AreaV,
-		AreaCounter, AreaTimer, AreaPeripheral, AreaSysInfo, AreaSysFlags, AreaS7200AN:
+	case AreaDataRecord, AreaInputs, AreaOutputs, AreaMerkers, AreaDB, AreaDI, AreaLocal, AreaV,
+		AreaCounter, AreaTimer, AreaIECCounter200, AreaIECTimer200, AreaPeripheral, AreaSysInfo, AreaSysFlags, AreaS7200AN, AreaS7200AO:
 		return nil
 	default:
 		return &S7Error{Message: "unsupported area code 0x" + hexByte(area)}
 	}
+}
+
+// AreaString returns a short display name for the area code (e.g. "I", "DB", "M"). Unknown codes return hex.
+func AreaString(area byte) string {
+	if s, ok := areaNames[area]; ok {
+		return s
+	}
+	return fmt.Sprintf("0x%02X", area)
+}
+
+var areaNames = map[byte]string{
+	AreaDataRecord: "RECORD", AreaSysInfo: "SI200", AreaSysFlags: "SF200",
+	AreaS7200AN: "AI200", AreaS7200AO: "AO200",
+	AreaPeripheral: "P", AreaInputs: "I", AreaOutputs: "Q", AreaMerkers: "M",
+	AreaDB: "DB", AreaDI: "DI", AreaLocal: "L", AreaV: "V",
+	AreaCounter: "C", AreaTimer: "T",
+	30: "C200", 31: "T200", // IEC counter/timer 200
+}
+
+// SyntaxIDString returns a display name for the variable specification syntax ID. Unknown IDs return hex.
+func SyntaxIDString(syntax byte) string {
+	if s, ok := syntaxIDNames[syntax]; ok {
+		return s
+	}
+	return fmt.Sprintf("0x%02X", syntax)
+}
+
+var syntaxIDNames = map[byte]string{
+	SyntaxIDS7Any: "S7ANY", 0x11: "ParameterShort", 0x12: "ParameterExtended",
+	0x13: "PBC-R_ID", 0x15: "ALARM_LOCKFREE", 0x16: "ALARM_IND", 0x19: "ALARM_ACK",
+	0x1a: "ALARM_QUERYREQ", 0x1c: "NOTIFY_IND",
+	0x82: "NCK", 0x83: "NCK_M", 0x84: "NCK_I",
+	SyntaxIDDriveES: "DRIVEESANY", SyntaxID1200Symbolic: "1200SYM", SyntaxIDDBRead: "DBREAD",
 }
 
 // Transport size codes for request (address specification in S7Any).
@@ -82,15 +119,44 @@ const (
 type ResponseTransportSize byte
 
 const (
-	RespTransportSizeBit   ResponseTransportSize = 0x01
-	RespTransportSizeByte  ResponseTransportSize = 0x02
-	RespTransportSizeChar  ResponseTransportSize = 0x03
-	RespTransportSizeWord  ResponseTransportSize = 0x04
-	RespTransportSizeInt   ResponseTransportSize = 0x05
-	RespTransportSizeDWord ResponseTransportSize = 0x06
-	RespTransportSizeDInt  ResponseTransportSize = 0x07
-	RespTransportSizeReal  ResponseTransportSize = 0x08
+	RespTransportSizeBit       ResponseTransportSize = 0x01
+	RespTransportSizeByte      ResponseTransportSize = 0x02
+	RespTransportSizeChar      ResponseTransportSize = 0x03
+	RespTransportSizeWord      ResponseTransportSize = 0x04
+	RespTransportSizeInt       ResponseTransportSize = 0x05
+	RespTransportSizeDWord     ResponseTransportSize = 0x06
+	RespTransportSizeDInt      ResponseTransportSize = 0x07
+	RespTransportSizeReal      ResponseTransportSize = 0x08
+	RespTransportSizeDATE      ResponseTransportSize = 0x09 // 2 bytes
+	RespTransportSizeTOD       ResponseTransportSize = 0x0A // 4 bytes (time of day)
+	RespTransportSizeTIME      ResponseTransportSize = 0x0B // 4 bytes
+	RespTransportSizeS5TIME    ResponseTransportSize = 0x0C // 2 bytes
+	RespTransportSizeDT        ResponseTransportSize = 0x0F // 8 bytes (date and time)
+	RespTransportSizeCount     ResponseTransportSize = 0x1C // COUNTER (2 bytes)
+	RespTransportSizeTimer     ResponseTransportSize = 0x1D // TIMER (2 bytes)
+	RespTransportSizeIECCount  ResponseTransportSize = 30   // IEC counter (S7-200)
+	RespTransportSizeIECTimer  ResponseTransportSize = 31   // IEC timer (S7-200)
+	RespTransportSizeHSCounter ResponseTransportSize = 32   // High-speed counter
 )
+
+// String returns the transport size name for logging/diagnostics (e.g. "BYTE", "DATE", "COUNTER").
+func (r ResponseTransportSize) String() string {
+	if s, ok := responseTransportSizeNames[r]; ok {
+		return s
+	}
+	return fmt.Sprintf("0x%02X", byte(r))
+}
+
+var responseTransportSizeNames = map[ResponseTransportSize]string{
+	RespTransportSizeBit: "BIT", RespTransportSizeByte: "BYTE", RespTransportSizeChar: "CHAR",
+	RespTransportSizeWord: "WORD", RespTransportSizeInt: "INT", RespTransportSizeDWord: "DWORD",
+	RespTransportSizeDInt: "DINT", RespTransportSizeReal: "REAL",
+	RespTransportSizeDATE: "DATE", RespTransportSizeTOD: "TOD", RespTransportSizeTIME: "TIME",
+	RespTransportSizeS5TIME: "S5TIME", RespTransportSizeDT: "DATE_AND_TIME",
+	RespTransportSizeCount: "COUNTER", RespTransportSizeTimer: "TIMER",
+	RespTransportSizeIECCount: "IEC_COUNTER", RespTransportSizeIECTimer: "IEC_TIMER",
+	RespTransportSizeHSCounter: "HS_COUNTER",
+}
 
 // S7AnyAddress is a specification of an S7 variable address
 type S7AnyAddress struct {
@@ -159,6 +225,16 @@ func NormalizeResponseDataLength(transportSize ResponseTransportSize, rawLength 
 		return (int(rawLength) + 7) / 8, nil
 	case RespTransportSizeByte:
 		return int(rawLength), nil
+	case RespTransportSizeDATE, RespTransportSizeS5TIME, RespTransportSizeCount, RespTransportSizeTimer,
+		RespTransportSizeIECCount, RespTransportSizeIECTimer, RespTransportSizeHSCounter:
+		// 2-byte types (or same bit-length formula)
+		return (int(rawLength) + 7) / 8, nil
+	case RespTransportSizeTOD, RespTransportSizeTIME:
+		// 4-byte types
+		return (int(rawLength) + 7) / 8, nil
+	case RespTransportSizeDT:
+		// 8-byte date-time
+		return (int(rawLength) + 7) / 8, nil
 	default:
 		return 0, &S7Error{Message: "unknown response transport size 0x" + hexByte(byte(transportSize))}
 	}

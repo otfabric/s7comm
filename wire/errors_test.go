@@ -59,12 +59,44 @@ func TestHeaderErrorString(t *testing.T) {
 	}
 }
 
+func TestErrClassString(t *testing.T) {
+	if got := ErrClassString(ErrClassNoError); got != "No error" {
+		t.Errorf("ErrClassString(NoError): got %q", got)
+	}
+	if got := ErrClassString(ErrClassAccess); got != "Access error" {
+		t.Errorf("ErrClassString(Access): got %q", got)
+	}
+	if got := ErrClassString(ErrClassObject); got != "Object definition" {
+		t.Errorf("ErrClassString(Object): got %q", got)
+	}
+	if got := ErrClassString(0x99); got != "class 0x99" {
+		t.Errorf("ErrClassString(unknown): got %q", got)
+	}
+}
+
 func TestItemReturnCodeString(t *testing.T) {
 	if got := ItemReturnCodeString(RetCodeSuccess); got != "success" {
 		t.Errorf("ItemReturnCodeString(success): got %q", got)
 	}
 	if got := ItemReturnCodeString(RetCodeAccessFault); got != "access denied" {
 		t.Errorf("ItemReturnCodeString(access): got %q", got)
+	}
+}
+
+func TestNewS7ErrorWithParam(t *testing.T) {
+	e := NewS7ErrorWithParam(ErrClassAccess, 0x01, nil)
+	if e.Message != "invalid address" {
+		t.Errorf("NewS7ErrorWithParam(nil param): message = %q, want header default", e.Message)
+	}
+	param := []byte{0x00, 0x00, 0x01, 0x14} // big-endian 0x0114 = block not found
+	e = NewS7ErrorWithParam(ErrClassObject, 0, param)
+	if e.Message != "block not found" {
+		t.Errorf("NewS7ErrorWithParam(0x0114): message = %q, want block not found", e.Message)
+	}
+	shortParam := []byte{0x00, 0x00}
+	e = NewS7ErrorWithParam(ErrClassAccess, 0x01, shortParam)
+	if e.Message != "invalid address" {
+		t.Errorf("NewS7ErrorWithParam(short param): message = %q", e.Message)
 	}
 }
 

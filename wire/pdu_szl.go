@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/binary"
+	"fmt"
 )
 
 // SZL ID constants
@@ -14,6 +15,69 @@ const (
 	SZLBlockList      = 0x0111 // Block list
 	SZLBlockInfo      = 0x0113 // Block info
 )
+
+// SZLIDString returns a human-readable name for the SZL ID when known (S7 SZL catalog).
+// Use in logging and diagnostics. Unknown IDs return a formatted hex string.
+func SZLIDString(id uint16) string {
+	if s, ok := szlIDNames[id]; ok {
+		return s
+	}
+	return fmt.Sprintf("SZL 0x%04X", id)
+}
+
+// szlIDNames maps SZL IDs to descriptive names (S7 SZL ID catalog).
+var szlIDNames = map[uint16]string{
+	0x0011: "Module identification",
+	0x0012: "All characteristics",
+	0x0013: "Data records of all memory areas",
+	0x0014: "All system areas of a module",
+	0x0015: "Data records of all block types",
+	0x0016: "Data records of all priority classes",
+	0x0017: "All SDBs of a module",
+	0x0018: "All data records",
+	0x0019: "Status of all LEDs",
+	0x001C: "Component identification",
+	0x00A0: "Diagnostic buffer",
+	0x0111: "Block list (single identification data record)",
+	0x0112: "Characteristics of a group",
+	0x0113: "Data record for one memory area / Block info",
+	0x0114: "One system area",
+	0x0115: "Data record of a block type",
+	0x0116: "Data record of priority class",
+	0x0117: "One single SDB",
+	0x0124: "Information about the last mode transition",
+	0x0131: "Information about a communication unit",
+	0x0132: "Status data for one communication section",
+	0x0137: "Details of one Ethernet interface",
+	0x0174: "Status of an LED",
+	0x0181: "Startup information of all synchronous error OBs",
+	0x0182: "Startup events of all synchronous error OBs",
+	0x0190: "Information of one DP master system",
+	0x0191: "Status information of all modules/racks with wrong type",
+	0x01A0: "Most recent diagnostic buffer entries",
+	0x0200: "Partial list extract",
+	0x021C: "Identification of all components (H system)",
+	0x0221: "Data records for specified interrupt",
+	0x0222: "Data records for specified interrupt",
+	0x0223: "Data records of priority classes being processed",
+	0x0224: "Processed mode transition",
+	0x0232: "Protection level",
+	0x0281: "Startup information of synchronous error OBs (one priority class)",
+	0x0282: "Startup events of synchronous error OBs (one priority class)",
+	0x0291: "Status information of all faulty modules",
+	0x0292: "Actual status of central racks/stations (DP)",
+	0x0294: "Actual status of rack/stations (DP/PN)",
+	0x0300: "Possible indexes of a partial list extract",
+	0x031C: "Identification of one component (redundant CPUs, H system)",
+	0x0381: "Startup information of all OBs of one priority class",
+	0x0382: "Startup events of all OBs of a priority class",
+	0x0391: "Status information of all modules not available",
+	0x0392: "State of battery backup of racks",
+	0x0424: "Current mode transition",
+	0x0492: "State of total backup of racks",
+	0x04A0: "Start information of all standard OBs",
+	0x0524: "Specified mode transition",
+}
 
 // Userdata function codes
 const (

@@ -252,7 +252,11 @@ func (c *Client) sendReceive(ctx context.Context, req []byte, expectedPDURef uin
 	}
 
 	if header.ErrorClass != 0 || header.ErrorCode != 0 {
-		return nil, nil, wire.NewS7Error(header.ErrorClass, header.ErrorCode)
+		var param []byte
+		if pl := int(header.ParamLength); pl > 0 && len(rest) >= pl {
+			param = rest[:pl]
+		}
+		return nil, nil, wire.NewS7ErrorWithParam(header.ErrorClass, header.ErrorCode, param)
 	}
 
 	need := int(header.ParamLength) + int(header.DataLength)

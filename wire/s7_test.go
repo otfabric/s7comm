@@ -124,6 +124,21 @@ func TestParseS7HeaderInvalidROSCTR(t *testing.T) {
 	}
 }
 
+func TestFunctionCodeString(t *testing.T) {
+	if got := FunctionCodeString(FuncReadVar); got != "Read Var" {
+		t.Errorf("FunctionCodeString(ReadVar): got %q", got)
+	}
+	if got := FunctionCodeString(FuncUpload); got != "Upload" {
+		t.Errorf("FunctionCodeString(Upload): got %q", got)
+	}
+	if got := FunctionCodeString(FuncSetupComm); got != "Setup communication" {
+		t.Errorf("FunctionCodeString(SetupComm): got %q", got)
+	}
+	if got := FunctionCodeString(0x99); got != "0x99" {
+		t.Errorf("FunctionCodeString(unknown): got %q", got)
+	}
+}
+
 func BenchmarkParseS7Header(b *testing.B) {
 	h := EncodeS7Header(ROSCTRJob, 7, 12, 4)
 	h = append(h, make([]byte, 16)...)

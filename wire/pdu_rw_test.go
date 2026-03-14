@@ -29,6 +29,16 @@ func TestNormalizeResponseDataLength(t *testing.T) {
 		{RespTransportSizeWord, 16, 2, false},
 		{RespTransportSizeDWord, 32, 4, false},
 		{RespTransportSizeReal, 32, 4, false},
+		{RespTransportSizeDATE, 16, 2, false},
+		{RespTransportSizeTOD, 32, 4, false},
+		{RespTransportSizeTIME, 32, 4, false},
+		{RespTransportSizeS5TIME, 16, 2, false},
+		{RespTransportSizeDT, 64, 8, false},
+		{RespTransportSizeCount, 16, 2, false},
+		{RespTransportSizeTimer, 16, 2, false},
+		{RespTransportSizeIECCount, 16, 2, false},
+		{RespTransportSizeIECTimer, 16, 2, false},
+		{RespTransportSizeHSCounter, 16, 2, false},
 		{ResponseTransportSize(0xFF), 10, 0, true},
 	}
 	for _, tt := range tests {
@@ -171,13 +181,52 @@ func TestValidateRequestSyntax(t *testing.T) {
 }
 
 func TestValidateArea(t *testing.T) {
-	for _, area := range []byte{AreaInputs, AreaOutputs, AreaMerkers, AreaDB, AreaDI, AreaCounter, AreaTimer, AreaPeripheral} {
+	for _, area := range []byte{AreaDataRecord, AreaInputs, AreaOutputs, AreaMerkers, AreaDB, AreaDI, AreaCounter, AreaTimer, AreaIECCounter200, AreaIECTimer200, AreaPeripheral, AreaSysInfo, AreaSysFlags, AreaS7200AN, AreaS7200AO} {
 		if err := ValidateArea(area); err != nil {
 			t.Errorf("ValidateArea(0x%02X): %v", area, err)
 		}
 	}
 	if err := ValidateArea(0xFF); err == nil {
 		t.Error("ValidateArea(0xFF): expected error")
+	}
+}
+
+func TestAreaString(t *testing.T) {
+	if got := AreaString(AreaInputs); got != "I" {
+		t.Errorf("AreaString(I): got %q", got)
+	}
+	if got := AreaString(AreaDB); got != "DB" {
+		t.Errorf("AreaString(DB): got %q", got)
+	}
+	if got := AreaString(0xFF); got != "0xFF" {
+		t.Errorf("AreaString(unknown): got %q", got)
+	}
+}
+
+func TestSyntaxIDString(t *testing.T) {
+	if got := SyntaxIDString(SyntaxIDS7Any); got != "S7ANY" {
+		t.Errorf("SyntaxIDString(S7ANY): got %q", got)
+	}
+	if got := SyntaxIDString(SyntaxIDDBRead); got != "DBREAD" {
+		t.Errorf("SyntaxIDString(DBREAD): got %q", got)
+	}
+	if got := SyntaxIDString(0x99); got != "0x99" {
+		t.Errorf("SyntaxIDString(unknown): got %q", got)
+	}
+}
+
+func TestResponseTransportSize_String(t *testing.T) {
+	if got := RespTransportSizeByte.String(); got != "BYTE" {
+		t.Errorf("RespTransportSizeByte.String(): got %q", got)
+	}
+	if got := RespTransportSizeDATE.String(); got != "DATE" {
+		t.Errorf("RespTransportSizeDATE.String(): got %q", got)
+	}
+	if got := RespTransportSizeIECCount.String(); got != "IEC_COUNTER" {
+		t.Errorf("RespTransportSizeIECCount.String(): got %q", got)
+	}
+	if got := ResponseTransportSize(0xFE).String(); got != "0xFE" {
+		t.Errorf("unknown transport size: got %q", got)
 	}
 }
 
