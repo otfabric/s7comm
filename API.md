@@ -28,12 +28,14 @@ func (c *Client) PDUSize() int
 Behavior notes:
 
 - Connect performs TCP dial, COTP setup, and S7 setup communication.
+- A second Connect() on an already-connected client only replaces the session after the new handshake succeeds; a failed reconnect leaves the existing session intact.
 - On setup failure, connection state is closed and cleared.
+- Invalid caller input (port, timeout, max PDU, rack/slot) returns `*ValidationError`.
 - Request methods are serialized internally for protocol safety.
 
 ### Read result model
 
-Read operations return a structured result so callers can distinguish success, short-read, empty-read, and rejection.
+Read operations return a structured result so callers can distinguish success, short-read, empty-read, and rejection. The library does not define JSON or other serialization; that is left to CLI/API layers.
 
 ```go
 type ReadStatus string
@@ -55,13 +57,23 @@ type ReadResult struct {
     ReturnedLength  int
     Data            []byte
     Warnings        []string
-    Error           string
+    Message         string // human-readable; descriptive, not stable API
+    Cause           error  // optional; for errors.Is/Unwrap
     ItemStatus      string
     ReturnCode      byte
 }
 
-func (r *ReadResult) OK() bool   // true if Status == ReadStatusSuccess
-func (r *ReadResult) Err() error // non-nil when Status is not success
+func (r *ReadResult) OK() bool     // true if Status == ReadStatusSuccess
+func (r *ReadResult) Success() bool // same as OK(); prefer res.Err() for flow
+func (r *ReadResult) Err() error   // non-nil when Status is not success; returns ErrNilReadResult when r is nil
+
+var ErrNilReadResult      = errors.New("read result is nil")  // returned by ReadResult.Err() when receiver is nil
+var ErrNotConnected       = errors.New("not connected")       // stable: methods requiring a session may return or wrap this
+var ErrRequestExceedsPDU  = errors.New("request exceeds negotiated PDU size")  // stable
+var ErrProtocolFailure    = errors.New("protocol failure")    // advanced/diagnostic: malformed protocol; handshake and request path wrap it
+
+type ValidationError struct { Message string }  // stable: caller-input validation; use errors.As(err, &ValidationError{}) to detect
+type PDURefMismatchError struct { Expected, Got uint16 }     // stable: response correlation; use errors.As(err, *PDURefMismatchError)
 ```
 
 **CLI contract (for s7commctl and other consumers):** To avoid ambiguity, CLIs should define:
@@ -89,7 +101,7 @@ Behavior notes:
 
 - Read methods return `*ReadResult` and a connection/setup `error`. Use `result.OK()` for success; `result.Err()` for a non-success read outcome; `result.Data` for the payload. Empty or short reads are never reported as success.
 - ReadArea chunks requests based on negotiated PDU size. Status is derived from requested vs returned length (success, short-read, empty-read) or from S7 return codes (rejected).
-- WriteArea uses WriteVar with optional rate limiting.
+- WriteArea writes `len(data)` bytes; `addr.Size` is ignored. Uses WriteVar with optional rate limiting. Invalid address returns `*ValidationError`.
 
 ### Range scan API (Phase 2)
 
@@ -158,14 +170,15 @@ type RackSlot struct {
 }
 
 type CompareReadRequest struct {
-    Address    string
-    Port       int
-    Candidates []RackSlot
-    Area       model.Area
-    DBNumber   int
-    Offset     int
-    Size       int
-    Timeout    time.Duration
+    Address      string
+    Port         int
+    Candidates   []RackSlot
+    Area         model.Area
+    DBNumber     int
+    Offset       int
+    Size         int
+    Timeout      time.Duration
+    Parallelism  int  // concurrent connections; 0 or negative = 1 (sequential); results in candidate order
 }
 
 type CompareReadCandidate struct {
@@ -183,20 +196,21 @@ type CompareReadResult struct {
 func CompareRead(ctx context.Context, req CompareReadRequest) (*CompareReadResult, error)
 ```
 
-Behavior: For each candidate, creates a client, connects with that rack/slot, performs one read, closes. If all candidates return success and the returned data is identical, RackSlotInsensitive is true.
+Behavior: For each candidate, creates a client, connects with that rack/slot, performs one read, closes. RackSlotInsensitive is true only when every candidate succeeded and all returned identical data.
 
 ### Discovery API
 
 ```go
 type DiscoverResult struct {
-    IP      string
-    Port    int
-    IsS7    bool
-    Rack    int
-    Slot    int
-    PDUSize int
-    TSAP    string
-    Error   string
+    IP               string
+    Port             int
+    IsS7             bool
+    Rack             int
+    Slot             int
+    PDUSize          int
+    TSAP             string
+    Error            string
+    AbandonedReason  string // e.g. "max_attempts", "context_canceled" when host was not found
 }
 
 func Discover(ctx context.Context, cidr string, opts ...DiscoverOption) ([]DiscoverResult, error)
@@ -204,6 +218,9 @@ func WithDiscoverTimeout(ms int) DiscoverOption
 func WithDiscoverParallel(n int) DiscoverOption
 func WithDiscoverRackSlotRange(rackMin, rackMax, slotMin, slotMax int) DiscoverOption
 func WithDiscoverRateLimit(ms int) DiscoverOption
+func WithDiscoverSafetyMode(mode SafetyMode) DiscoverOption
+func WithDiscoverJitter(ms int) DiscoverOption
+func WithDiscoverMaxAttemptsPerHost(n int) DiscoverOption
 ```
 
 Default discovery settings:
@@ -220,6 +237,14 @@ A host-oriented probe that determines which rack/slot combinations are valid for
 **Strict mode** (`Strict: true`): only candidates that complete both S7 setup and a benign follow-up query are considered valid (`valid-query`). This avoids false positives from permissive gateways or simulators that accept setup but do not map to a real CPU. Without strict mode, any candidate that reaches setup success (`setup-only`, `valid-connect`, or `valid-query`) is valid.
 
 ```go
+type SafetyMode string
+
+const (
+    SafetyConservative SafetyMode = "conservative"
+    SafetyNormal       SafetyMode = "normal"
+    SafetyAggressive   SafetyMode = "aggressive"
+)
+
 type ProbeStage string
 
 const (
@@ -267,13 +292,17 @@ type RackSlotProbeRequest struct {
     RackMax     int           // default 7
     SlotMin     int           // default 0
     SlotMax     int           // default 31
-    Timeout     time.Duration // per-attempt timeout; default 2s
-    Parallelism int           // concurrent probes; default 4
+    Timeout     time.Duration // per-attempt timeout; default from SafetyMode
+    Parallelism int           // concurrent probes; default from SafetyMode
     DelayMS     int           // delay between attempts in ms; default 0
     StopOnFirst bool          // stop after first valid candidate
 
     LocalTSAP  *uint16
     RemoteTSAP *uint16
+
+    SafetyMode         SafetyMode      // affects default Timeout, Parallelism, DelayMS
+    JitterMS            int            // random [0, JitterMS] ms before each attempt; 0 = no jitter
+    MaxAttemptsPerHost  int            // cap (rack,slot) attempts per host; 0 = no limit
 
     Strict  bool            // if true, only valid-query counts as valid; run follow-up
     Confirm ConfirmationKind // when Strict: szl | cpu-state | any (default when Strict: any)
@@ -299,10 +328,12 @@ type RackSlotProbeResult struct {
     Address          string
     Candidates       []RackSlotCandidate
     Valid            []RackSlotCandidate
-    SetupAccepted    int // candidates that reached setup success
-    ConfirmedByQuery int // candidates with valid-query
-    Flaky            int // candidates with status flaky (mixed retry results)
+    SetupAccepted    int    // candidates that reached setup success
+    ConfirmedByQuery int    // candidates with valid-query
+    Flaky            int    // reserved for Phase 2
     TCPOnly          int
+    StoppedEarly     bool   // true when stopped due to MaxAttemptsPerHost before all candidates tried
+    StoppedReason    string // e.g. "max_attempts_reached"
 }
 
 func ProbeRackSlots(ctx context.Context, req RackSlotProbeRequest) (*RackSlotProbeResult, error)
@@ -342,13 +373,17 @@ Behavior notes:
 func (c *Client) Identify(ctx context.Context) (*model.DeviceInfo, error)
 func (c *Client) GetCPUState(ctx context.Context) (model.CPUState, error)
 func (c *Client) GetProtectionLevel(ctx context.Context) (model.ProtectionLevel, error)
-func (c *Client) ReadDiagBuffer(ctx context.Context) (*model.DiagBuffer, error)
+func (c *Client) ReadDiagBuffer(ctx context.Context) (*model.DiagBuffer, error)   // partial parsing; 20-byte stride
+func (c *Client) ReadDiagBufferRaw(ctx context.Context) ([]byte, error)          // raw SZL 0x00A0 payload
 
 func (c *Client) ListBlocks(ctx context.Context, bt model.BlockType) ([]model.BlockInfo, error)
 func (c *Client) ListAllBlocks(ctx context.Context) ([]model.BlockInfo, error)
 func (c *Client) GetBlockInfo(ctx context.Context, bt model.BlockType, num int) (*model.BlockInfo, error)
 func (c *Client) UploadBlock(ctx context.Context, bt model.BlockType, num int) (*model.BlockData, error)
 ```
+
+- **GetBlockInfo**: Best-effort; on transport/protocol failure returns `(nil, err)`; on parse failure after transport success returns partial `BlockInfo` (Type, Number) plus `err`. Invalid block number returns `*ValidationError`.
+- **UploadBlock**: Performs a best-effort end-upload cleanup before returning (500ms timeout); cleanup errors are not returned. Invalid block number returns `*ValidationError`.
 
 ### Client options
 
@@ -433,7 +468,6 @@ type DiagEntry struct { ... }
 type DiagBuffer struct { ... }
 
 type Fingerprint struct { ... }
-type DiscoverResult struct { ... }
 type TSAPProfile struct { ... }
 ```
 
@@ -523,14 +557,16 @@ Decoding of received payloads is done via `cotp.Decode(payload)` from go-cotp (e
 ### S7 headers
 
 ```go
-func EncodeS7Header(rosctr byte, pduRef uint16, paramLen, dataLen int) []byte
+func EncodeS7Header(rosctr ROSCTR, pduRef uint16, paramLen, dataLen int) []byte
 func ParseS7Header(data []byte) (*S7Header, []byte, error)
 ```
+
+`ROSCTR` is a wire package type (e.g. `ROSCTRJob`, `ROSCTRAckData`).
 
 ### PDUs
 
 ```go
-func EncodeSetupCommRequest(maxAmqCalling, maxAmqCalled, pduSize int) []byte
+func EncodeSetupCommRequest(pduRef uint16, maxAmqCalling, maxAmqCalled, pduSize int) []byte
 func ParseSetupCommResponse(data []byte) (*SetupCommResponse, error)
 
 func EncodeS7Any(addr S7AnyAddress) []byte
@@ -540,7 +576,7 @@ func EncodeWriteVarRequest(pduRef uint16, addr S7AnyAddress, value []byte) []byt
 func ParseWriteVarResponse(param, data []byte) error
 
 func EncodeSZLRequest(pduRef, szlID, szlIndex uint16) []byte
-func ParseSZLResponse(paramData, data []byte) (*SZLResponse, error)
+func ParseSZLResponse(data []byte) (*SZLResponse, error)
 
 func EncodeBlockListRequest(pduRef uint16, blockType byte) []byte
 func ParseBlockListResponse(szlData []byte) ([]BlockListEntry, error)

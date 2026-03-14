@@ -1,4 +1,11 @@
 // Package transport provides TCP connection handling for S7 using go-tpkt for TPKT framing.
+//
+// SendContext and ReceiveContext set read/write deadlines from the context deadline and
+// the Conn's timeout; no per-I/O goroutine is used. Cancellation is effective when the
+// context has a deadline; otherwise I/O may run until the Conn timeout.
+//
+// SetTracer is not safe for concurrent use with ongoing Send/Receive; call it before
+// starting I/O or when the connection is idle.
 package transport
 
 import (
@@ -38,7 +45,7 @@ func New(conn net.Conn, timeout time.Duration) *Conn {
 	}
 }
 
-// SetTracer sets a tracer for protocol debugging
+// SetTracer sets a tracer for protocol debugging. Do not call concurrently with Send/Receive.
 func (c *Conn) SetTracer(t Tracer) {
 	c.tracer = t
 }
@@ -48,7 +55,8 @@ func (c *Conn) Send(data []byte) error {
 	return c.SendContext(context.Background(), data)
 }
 
-// SendContext sends a TPDU payload as one TPKT frame with context cancellation support.
+// SendContext sends a TPDU payload as one TPKT frame. The write deadline is set from
+// ctx.Deadline() and the Conn timeout; no goroutine is spawned.
 func (c *Conn) SendContext(ctx context.Context, data []byte) error {
 	if c.conn == nil {
 		return ErrConnectionNotEstablished
@@ -56,9 +64,6 @@ func (c *Conn) SendContext(ctx context.Context, data []byte) error {
 	if err := setWriteDeadline(c.conn, c.timeout, ctx); err != nil {
 		return err
 	}
-	done := cancelWriteOnContextDone(c.conn, ctx)
-	defer close(done)
-
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -74,7 +79,8 @@ func (c *Conn) Receive() ([]byte, error) {
 	return c.ReceiveContext(context.Background())
 }
 
-// ReceiveContext reads the next TPKT frame with context cancellation and returns its payload.
+// ReceiveContext reads the next TPKT frame. The read deadline is set from ctx.Deadline()
+// and the Conn timeout; no goroutine is spawned.
 func (c *Conn) ReceiveContext(ctx context.Context) ([]byte, error) {
 	if c.conn == nil {
 		return nil, ErrConnectionNotEstablished
@@ -82,9 +88,6 @@ func (c *Conn) ReceiveContext(ctx context.Context) ([]byte, error) {
 	if err := setReadDeadline(c.conn, c.timeout, ctx); err != nil {
 		return nil, err
 	}
-	done := cancelReadOnContextDone(c.conn, ctx)
-	defer close(done)
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -125,34 +128,14 @@ func setWriteDeadline(conn net.Conn, timeout time.Duration, ctx context.Context)
 	return conn.SetWriteDeadline(deadline)
 }
 
-func cancelReadOnContextDone(conn net.Conn, ctx context.Context) chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.SetReadDeadline(time.Now())
-		case <-done:
-		}
-	}()
-	return done
-}
-
-func cancelWriteOnContextDone(conn net.Conn, ctx context.Context) chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.SetWriteDeadline(time.Now())
-		case <-done:
-		}
-	}()
-	return done
-}
-
-// Close closes the connection
+// Close closes the connection and nils internal fields so the Conn is in a clear terminal state.
 func (c *Conn) Close() error {
 	if c.conn != nil {
-		return c.conn.Close()
+		err := c.conn.Close()
+		c.conn = nil
+		c.reader = nil
+		c.writer = nil
+		return err
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestIsPortOpen(t *testing.T) {
@@ -15,7 +16,12 @@ func TestIsPortOpen(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 
 	port := ln.Addr().(*net.TCPAddr).Port
-	if !isPortOpen(context.Background(), "127.0.0.1", port) {
-		t.Fatalf("expected port %s to be open", strconv.Itoa(port))
+	if err := isPortOpen(context.Background(), "127.0.0.1", port, 2*time.Second); err != nil {
+		t.Fatalf("expected port %s to be open: %v", strconv.Itoa(port), err)
+	}
+
+	// Unlikely-to-be-open port: expect dial to fail (connection refused or timeout)
+	if err := isPortOpen(context.Background(), "127.0.0.1", 35555, 50*time.Millisecond); err == nil {
+		t.Error("expected error when no listener on port")
 	}
 }

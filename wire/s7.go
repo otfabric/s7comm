@@ -5,13 +5,28 @@ import (
 	"fmt"
 )
 
-// S7 ROSCTR types (message types)
+// ROSCTR is the S7 message type (Remote Operating Service Control).
+type ROSCTR byte
+
+// S7 ROSCTR constants. ACK and ACK_DATA are distinct: ACK has no payload, ACK_DATA carries param+data.
 const (
-	ROSCTRJob      = 0x01 // Job request
-	ROSCTRAck      = 0x02 // Acknowledgement without data
-	ROSCTRAckData  = 0x03 // Acknowledgement with data
-	ROSCTRUserdata = 0x07 // Userdata (for SZL, etc.)
+	ROSCTRJob      ROSCTR = 0x01 // Job request
+	ROSCTRAck      ROSCTR = 0x02 // Acknowledgement without data
+	ROSCTRAckData  ROSCTR = 0x03 // Acknowledgement with data
+	ROSCTRUserdata ROSCTR = 0x07 // Userdata (for SZL, etc.)
 )
+
+// IsAck returns true for ROSCTRAck (ack without data).
+func (r ROSCTR) IsAck() bool { return r == ROSCTRAck }
+
+// IsAckData returns true for ROSCTRAckData (ack with param/data payload).
+func (r ROSCTR) IsAckData() bool { return r == ROSCTRAckData }
+
+// IsJob returns true for ROSCTRJob.
+func (r ROSCTR) IsJob() bool { return r == ROSCTRJob }
+
+// IsUserdata returns true for ROSCTRUserdata.
+func (r ROSCTR) IsUserdata() bool { return r == ROSCTRUserdata }
 
 // S7 function codes
 const (
@@ -29,25 +44,25 @@ const (
 	FuncPLCControl    = 0x28
 )
 
-// S7Header represents an S7 protocol header
+// S7Header represents an S7 protocol header. All fields are raw wire values.
 type S7Header struct {
 	ProtocolID   byte   // Always 0x32
-	ROSCTR       byte   // Remote Operating Service Control
-	RedundancyID uint16 // Usually 0
-	PDURef       uint16 // PDU reference
-	ParamLength  uint16 // Parameter length
-	DataLength   uint16 // Data length
-	ErrorClass   byte   // Error class (for Ack)
-	ErrorCode    byte   // Error code (for Ack)
+	ROSCTR       ROSCTR // Message type (Job, Ack, AckData, Userdata)
+	RedundancyID uint16
+	PDURef       uint16 // PDU reference for request/response correlation
+	ParamLength  uint16 // Declared parameter section length
+	DataLength   uint16 // Declared data section length
+	ErrorClass   byte   // Error class (for Ack/AckData)
+	ErrorCode    byte   // Error code (for Ack/AckData)
 }
 
 const S7HeaderSize = 10
 
 // EncodeS7Header creates an S7 protocol header
-func EncodeS7Header(rosctr byte, pduRef uint16, paramLen, dataLen int) []byte {
+func EncodeS7Header(rosctr ROSCTR, pduRef uint16, paramLen, dataLen int) []byte {
 	buf := make([]byte, S7HeaderSize)
 	buf[0] = 0x32 // S7 Protocol ID
-	buf[1] = rosctr
+	buf[1] = byte(rosctr)
 	binary.BigEndian.PutUint16(buf[2:4], 0)      // Redundancy ID
 	binary.BigEndian.PutUint16(buf[4:6], pduRef) // PDU Ref
 	binary.BigEndian.PutUint16(buf[6:8], uint16(paramLen))
@@ -66,7 +81,7 @@ func ParseS7Header(data []byte) (*S7Header, []byte, error) {
 
 	h := &S7Header{
 		ProtocolID:   data[0],
-		ROSCTR:       data[1],
+		ROSCTR:       ROSCTR(data[1]),
 		RedundancyID: binary.BigEndian.Uint16(data[2:4]),
 		PDURef:       binary.BigEndian.Uint16(data[4:6]),
 		ParamLength:  binary.BigEndian.Uint16(data[6:8]),
@@ -74,7 +89,7 @@ func ParseS7Header(data []byte) (*S7Header, []byte, error) {
 	}
 
 	offset := S7HeaderSize
-	if h.ROSCTR == ROSCTRAckData || h.ROSCTR == ROSCTRAck {
+	if h.ROSCTR.IsAckData() || h.ROSCTR.IsAck() {
 		if len(data) < S7HeaderSize+2 {
 			return nil, nil, ErrShortS7AckHeader
 		}

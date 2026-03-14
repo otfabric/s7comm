@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all check test test-race coverage cover lint lint-ci fmt vet clean
+.PHONY: help all check test test-race coverage cover bench lint lint-ci fmt vet clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,6 +19,10 @@ test: ## Run unit tests with race detector
 	@go test -count=1 -race ./...
 
 test-race: test ## Alias for race-enabled test run
+
+bench: ## Run benchmarks (discovery, probe, compare, wire parsers)
+	@echo "Running benchmarks"
+	@go test -count=1 -bench=. -benchmem ./...
 
 coverage: ## Run tests with coverage (writes coverage.out)
 	@echo "Running coverage"

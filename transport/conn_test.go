@@ -181,3 +181,44 @@ func TestConnWithRealTCP(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+// BenchmarkSend measures Send throughput over a pipe (writer only; other end drains).
+func BenchmarkSend(b *testing.B) {
+	c1, c2 := net.Pipe()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := c2.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	conn := New(c1, 5*time.Second)
+	payload := []byte{0x02, 0xF0, 0x80}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = conn.Send(payload)
+	}
+}
+
+// BenchmarkReceive measures Receive throughput over a pipe (reader only; other end writes).
+func BenchmarkReceive(b *testing.B) {
+	c1, c2 := net.Pipe()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
+	frame, _ := tpkt.Encode([]byte{0x02, 0xF0, 0x80})
+	go func() {
+		for {
+			if _, err := c2.Write(frame); err != nil {
+				return
+			}
+		}
+	}()
+	conn := New(c1, 5*time.Second)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = conn.Receive()
+	}
+}

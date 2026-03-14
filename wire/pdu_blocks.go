@@ -50,13 +50,35 @@ type BlockListEntry struct {
 	Flags       byte
 }
 
-// ParseBlockListResponse parses a block list response
+// BlockInfoData holds block info fields parsed from SZL 0x0113 response data.
+// Layout is heuristic and may vary by PLC; only LoadMemory, LocalData, MC7Size are parsed confidently.
+type BlockInfoData struct {
+	LoadMemory int
+	LocalData  int
+	MC7Size    int
+}
+
+// ParseBlockInfoResponse parses block info from SZL 0x0113 response data (resp.Data).
+// Permissive/partial: requires at least 6 bytes; only the first three 16-bit fields are interpreted.
+// SZL block info layout can vary by device; treat as heuristic for interoperability.
+func ParseBlockInfoResponse(szlData []byte) (BlockInfoData, error) {
+	out := BlockInfoData{}
+	if len(szlData) < 6 {
+		return out, fmt.Errorf("block info data too short: need 6 bytes, got %d", len(szlData))
+	}
+	out.LoadMemory = int(binary.BigEndian.Uint16(szlData[0:2]))
+	out.LocalData = int(binary.BigEndian.Uint16(szlData[2:4]))
+	out.MC7Size = int(binary.BigEndian.Uint16(szlData[4:6]))
+	return out, nil
+}
+
+// ParseBlockListResponse parses a block list response. Strict: szlData length must be
+// a multiple of 4 (no trailing garbage). Each entry is 4 bytes: block number, type, language/flags.
 func ParseBlockListResponse(szlData []byte) ([]BlockListEntry, error) {
+	if len(szlData)%4 != 0 {
+		return nil, fmt.Errorf("block list data length %d not multiple of 4", len(szlData))
+	}
 	var entries []BlockListEntry
-	// SZL data format: each entry is 4 bytes
-	// [0-1] = block number
-	// [2] = block type
-	// [3] = language/flags
 	offset := 0
 	for offset+4 <= len(szlData) {
 		entry := BlockListEntry{
@@ -169,7 +191,8 @@ type UploadChunk struct {
 	Data []byte
 }
 
-// ParseUploadResponse parses upload continuation response and chunk payload.
+// ParseUploadResponse parses upload continuation response and chunk payload. Strict:
+// declared length must not overrun the data buffer; overrun returns an error.
 func ParseUploadResponse(param, data []byte) (*UploadChunk, error) {
 	if len(param) < 2 || param[0] != FuncUpload {
 		return nil, &S7Error{Message: "invalid upload response"}
@@ -185,7 +208,7 @@ func ParseUploadResponse(param, data []byte) (*UploadChunk, error) {
 	lengthBits := int(binary.BigEndian.Uint16(data[2:4]))
 	lengthBytes := (lengthBits + 7) / 8
 	if 4+lengthBytes > len(data) {
-		lengthBytes = len(data) - 4
+		return nil, fmt.Errorf("upload response length overrun: need %d bytes, have %d", 4+lengthBytes, len(data))
 	}
 
 	return &UploadChunk{Done: done, Data: data[4 : 4+lengthBytes]}, nil

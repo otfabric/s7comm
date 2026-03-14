@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -16,38 +18,78 @@ var (
 	serialRegex   = regexp.MustCompile(`(?i)[A-Z0-9]{8,24}`)
 )
 
-// Identify reads device identification from SZL
+// readModuleIDSZL performs the SZL 0x0011 (Module ID) read and returns the raw SZL data payload.
+// Transport-only; no heuristic parsing. Used by Identify.
+func (c *Client) readModuleIDSZL(ctx context.Context) ([]byte, error) {
+	ref := c.nextPDURef()
+	req := wire.EncodeSZLRequest(ref, wire.SZLModuleID, 0)
+	_, data, err := c.sendReceive(ctx, req, ref)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := wire.ParseSZLResponse(data)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// readComponentIDSZL performs the SZL 0x001C (Component ID) read and returns the raw SZL data payload.
+// Transport-only; no heuristic parsing. Used by Identify.
+func (c *Client) readComponentIDSZL(ctx context.Context) ([]byte, error) {
+	ref := c.nextPDURef()
+	req := wire.EncodeSZLRequest(ref, wire.SZLComponentID, 0)
+	_, data, err := c.sendReceive(ctx, req, ref)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := wire.ParseSZLResponse(data)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// Identify is best-effort and may return partial device info with a non-nil error.
+// It reads device identification from SZL (Module ID and Component ID) and interprets
+// fields heuristically. Return contract: info != nil with partial data and err != nil is
+// expected when one SZL succeeds and the other fails; (nil, error) only when both reads fail.
+// Callers should treat (info, err) as "partial info plus errors" and (nil, err) as "no info".
+// Unknown fields remain empty; parsing is heuristic.
 func (c *Client) Identify(ctx context.Context) (*model.DeviceInfo, error) {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
 
 	info := &model.DeviceInfo{}
+	var errs []error
 
-	// SZL 0x0011 - Module identification
-	req := wire.EncodeSZLRequest(c.nextPDURef(), wire.SZLModuleID, 0)
-	_, data, err := c.sendReceive(ctx, req)
-	if err == nil {
-		resp, err := wire.ParseSZLResponse(nil, data)
-		if err == nil && len(resp.Data) >= 20 {
-			info.OrderNumber = trimString(resp.Data[2:22])
-			populateInfoFromRaw(info, resp.Data)
-		}
+	rawModule, errMod := c.readModuleIDSZL(ctx)
+	if errMod != nil {
+		errs = append(errs, errMod)
+	} else if len(rawModule) >= 20 {
+		info.OrderNumber = trimString(rawModule[2:22])
+		populateInfoFromRaw(info, rawModule)
+	} else if len(rawModule) > 0 {
+		errs = append(errs, fmt.Errorf("module ID SZL payload too short: got %d", len(rawModule)))
 	}
 
-	// SZL 0x001C - Component identification
-	req = wire.EncodeSZLRequest(c.nextPDURef(), wire.SZLComponentID, 0)
-	_, data, err = c.sendReceive(ctx, req)
-	if err == nil {
-		resp, err := wire.ParseSZLResponse(nil, data)
-		if err == nil && len(resp.Data) >= 34 {
-			info.ModuleName = trimString(resp.Data[2:26])
-			info.PlantID = trimString(resp.Data[26:34])
-			populateInfoFromRaw(info, resp.Data)
-		}
+	rawComponent, errComp := c.readComponentIDSZL(ctx)
+	if errComp != nil {
+		errs = append(errs, errComp)
+	} else if len(rawComponent) >= 34 {
+		info.ModuleName = trimString(rawComponent[2:26])
+		info.PlantID = trimString(rawComponent[26:34])
+		populateInfoFromRaw(info, rawComponent)
+	} else if len(rawComponent) > 0 {
+		errs = append(errs, fmt.Errorf("component ID SZL payload too short: got %d", len(rawComponent)))
 	}
 
-	setIdentifyDefaults(info)
-
+	if len(errs) == 2 {
+		return nil, errors.Join(errs...)
+	}
+	if len(errs) == 1 {
+		return info, errs[0]
+	}
 	return info, nil
 }
 
@@ -56,13 +98,14 @@ func (c *Client) GetCPUState(ctx context.Context) (model.CPUState, error) {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
 
-	req := wire.EncodeSZLRequest(c.nextPDURef(), wire.SZLCPUState, 0)
-	_, data, err := c.sendReceive(ctx, req)
+	ref := c.nextPDURef()
+	req := wire.EncodeSZLRequest(ref, wire.SZLCPUState, 0)
+	_, data, err := c.sendReceive(ctx, req, ref)
 	if err != nil {
 		return model.CPUStateUnknown, err
 	}
 
-	resp, err := wire.ParseSZLResponse(nil, data)
+	resp, err := wire.ParseSZLResponse(data)
 	if err != nil {
 		return model.CPUStateUnknown, err
 	}
@@ -87,13 +130,14 @@ func (c *Client) GetProtectionLevel(ctx context.Context) (model.ProtectionLevel,
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
 
-	req := wire.EncodeSZLRequest(c.nextPDURef(), wire.SZLProtectionInfo, 0)
-	_, data, err := c.sendReceive(ctx, req)
+	ref := c.nextPDURef()
+	req := wire.EncodeSZLRequest(ref, wire.SZLProtectionInfo, 0)
+	_, data, err := c.sendReceive(ctx, req, ref)
 	if err != nil {
 		return model.ProtectionNone, err
 	}
 
-	resp, err := wire.ParseSZLResponse(nil, data)
+	resp, err := wire.ParseSZLResponse(data)
 	if err != nil {
 		return model.ProtectionNone, err
 	}
@@ -106,37 +150,49 @@ func (c *Client) GetProtectionLevel(ctx context.Context) (model.ProtectionLevel,
 	return model.ProtectionNone, nil
 }
 
-// ReadDiagBuffer reads the diagnostic buffer
-func (c *Client) ReadDiagBuffer(ctx context.Context) (*model.DiagBuffer, error) {
+// ReadDiagBufferRaw returns the raw SZL payload for the diagnostic buffer (SZL 0x00A0).
+// Callers can parse the layout themselves; device layout and entry stride are variant-dependent.
+func (c *Client) ReadDiagBufferRaw(ctx context.Context) ([]byte, error) {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
 
-	req := wire.EncodeSZLRequest(c.nextPDURef(), wire.SZLDiagBuffer, 0)
-	_, data, err := c.sendReceive(ctx, req)
+	ref := c.nextPDURef()
+	req := wire.EncodeSZLRequest(ref, wire.SZLDiagBuffer, 0)
+	_, data, err := c.sendReceive(ctx, req, ref)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := wire.ParseSZLResponse(nil, data)
+	resp, err := wire.ParseSZLResponse(data)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// ReadDiagBuffer is best-effort and may return partial entries with a non-nil error.
+// It performs partial diagnostic parsing of the SZL diagnostic buffer.
+// It uses a fixed 20-byte entry stride from offset 0 and reads only EventID, EventClass,
+// and Priority per entry. Layout is device-dependent; for full control use ReadDiagBufferRaw.
+func (c *Client) ReadDiagBuffer(ctx context.Context) (*model.DiagBuffer, error) {
+	raw, err := c.ReadDiagBufferRaw(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	buf := &model.DiagBuffer{}
-	// Parse diagnostic entries from resp.Data
-	// Format varies by PLC model
+	const diagEntrySize = 20
 	offset := 0
-	for offset+20 <= len(resp.Data) {
+	for offset+diagEntrySize <= len(raw) {
 		entry := model.DiagEntry{
-			EventID:    uint16(resp.Data[offset])<<8 | uint16(resp.Data[offset+1]),
-			EventClass: resp.Data[offset+2],
-			Priority:   resp.Data[offset+3],
+			EventID:    uint16(raw[offset])<<8 | uint16(raw[offset+1]),
+			EventClass: raw[offset+2],
+			Priority:   raw[offset+3],
 		}
 		buf.Entries = append(buf.Entries, entry)
-		offset += 20
+		offset += diagEntrySize
 	}
 	buf.TotalCount = len(buf.Entries)
-
 	return buf, nil
 }
 
@@ -227,22 +283,4 @@ func isLikelySerial(s string) bool {
 		}
 	}
 	return hasLetter && hasDigit
-}
-
-func setIdentifyDefaults(info *model.DeviceInfo) {
-	if info.OrderNumber == "" {
-		info.OrderNumber = "N/A"
-	}
-	if info.SerialNumber == "" {
-		info.SerialNumber = "N/A"
-	}
-	if info.ModuleName == "" {
-		info.ModuleName = "N/A"
-	}
-	if info.CPUType == "" {
-		info.CPUType = "N/A"
-	}
-	if info.FWVersion == "" {
-		info.FWVersion = "N/A"
-	}
 }

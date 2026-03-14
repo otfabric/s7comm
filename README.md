@@ -19,7 +19,18 @@ The library provides:
 - Block listing, block metadata retrieval, and block upload
 - Low-level wire parsing/encoding packages for protocol internals
 
-For complete API details, see [API.md](API.md).
+For complete API details, see [API.md](API.md). Changelog: [RELEASE.md](RELEASE.md) (current: v0.6.0).
+
+### Error and result semantics
+
+| Situation | How it is reported |
+|-----------|--------------------|
+| Validation failure (bad input) | `*ValidationError`; use `errors.As(err, &ValidationError{})` to detect |
+| Read outcome (success / short / empty / rejected / timeout) | `ReadResult.Status` and `result.Err()` |
+| Metadata or control op failure (Identify, GetCPUState, ListBlocks, UploadBlock, …) | `error` return |
+| Partial info (e.g. one SZL ok, one failed) | `(value, error)` — both non-nil; use value and handle error |
+
+Context cancellation is only strongly effective when the context has a deadline; otherwise I/O can run until the connection timeout. Prefer `context.WithTimeout` or `context.WithDeadline` when you need bounded operations. A second `Connect()` on an already-connected client only replaces the session after the new handshake succeeds, so a failed reconnect does not drop a healthy session.
 
 ## Install
 
@@ -51,14 +62,14 @@ func main() {
 	if err := c.Connect(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	result, err := c.ReadDB(ctx, 1, 0, 16)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if !result.OK() {
-		log.Fatal(result.Err())
+	if err := result.Err(); err != nil {
+		log.Fatal(err)
 	}
 
 	fmt.Printf("DB1.DBB0..15 = % X\n", result.Data)
@@ -66,6 +77,8 @@ func main() {
 ```
 
 ## Discovery
+
+Use conservative CIDR ranges in OT environments (e.g. `/24` or smaller); the library allows up to `/12` but large scans create many connections and load.
 
 ```go
 results, err := client.Discover(ctx, "192.168.0.0/24",
@@ -201,6 +214,8 @@ make check
 Useful targets:
 
 - `make test`
+- `make test-race` — tests with race detector
 - `make coverage`
+- `make bench` — run benchmarks (discovery, probe, compare, wire parsers)
 - `make lint`
 - `make lint-ci`

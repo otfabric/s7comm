@@ -2,8 +2,10 @@ package client
 
 import (
 	"context"
-	"github.com/otfabric/s7comm/model"
+	"errors"
 	"testing"
+
+	"github.com/otfabric/s7comm/model"
 )
 
 func TestConsolidateSpans_Empty(t *testing.T) {
@@ -71,6 +73,24 @@ func TestConsolidateSpans_NonAdjacentNotMerged(t *testing.T) {
 	}
 }
 
+func BenchmarkConsolidateSpans(b *testing.B) {
+	obs := make([]ReadProbeObservation, 200)
+	for i := range obs {
+		status := ReadStatusSuccess
+		if i%10 == 9 {
+			status = ReadStatusEmptyRead
+		}
+		obs[i] = ReadProbeObservation{
+			Offset: i * 8,
+			Result: ReadResult{Status: status, RequestedLength: 8, ReturnedLength: 8},
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ConsolidateSpans(obs, 8, 8)
+	}
+}
+
 func TestProbeReadableRanges_EmptyRange(t *testing.T) {
 	c := New("127.0.0.1")
 	defer func() { _ = c.Close() }()
@@ -96,6 +116,47 @@ func TestProbeReadableRanges_EmptyRange(t *testing.T) {
 	}
 }
 
+func TestProbeReadableRanges_InvalidRequest(t *testing.T) {
+	c := New("127.0.0.1")
+	defer func() { _ = c.Close() }()
+	_, err := c.ProbeReadableRanges(context.Background(), RangeProbeRequest{
+		Area: model.AreaDB, DBNumber: -1, Start: 0, End: 16, ProbeSize: 8,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative DBNumber")
+	}
+	_, err = c.ProbeReadableRanges(context.Background(), RangeProbeRequest{
+		Area: model.AreaInputs, Start: 20, End: 10, ProbeSize: 8,
+	})
+	if err == nil {
+		t.Fatal("expected error for start > end")
+	}
+	_, err = c.ProbeReadableRanges(context.Background(), RangeProbeRequest{
+		Area: model.AreaInputs, Start: 0, End: 16, ProbeSize: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative ProbeSize")
+	}
+	_, err = c.ProbeReadableRanges(context.Background(), RangeProbeRequest{
+		Area: model.AreaInputs, Start: 0, End: 16, ProbeSize: 8, Retries: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative Retries")
+	}
+	_, err = c.ProbeReadableRanges(context.Background(), RangeProbeRequest{
+		Area: model.AreaInputs, Start: 0, End: 16, ProbeSize: 8, Repeat: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative Repeat")
+	}
+	_, err = c.ProbeReadableRanges(context.Background(), RangeProbeRequest{
+		Area: model.AreaInputs, Start: 0, End: 16, ProbeSize: 8, Parallelism: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative Parallelism")
+	}
+}
+
 func TestProbeReadableRanges_RequiresConnectedClient(t *testing.T) {
 	c := New("127.0.0.1")
 	defer func() { _ = c.Close() }()
@@ -109,5 +170,8 @@ func TestProbeReadableRanges_RequiresConnectedClient(t *testing.T) {
 	_, err := c.ProbeReadableRanges(context.Background(), req)
 	if err == nil {
 		t.Error("expected error when client not connected")
+	}
+	if err != nil && !errors.Is(err, ErrNotConnected) {
+		t.Errorf("expected ErrNotConnected, got %v", err)
 	}
 }

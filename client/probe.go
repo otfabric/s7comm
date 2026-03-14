@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -11,6 +13,33 @@ import (
 	"github.com/otfabric/s7comm/transport"
 	"github.com/otfabric/s7comm/wire"
 )
+
+// jitterRNG returns a private RNG for jitter in this call (avoids package-global rand for reproducibility).
+func jitterRNG() *rand.Rand {
+	return rand.New(rand.NewSource(time.Now().UnixNano()))
+}
+
+// SafetyMode tunes discovery/probe for OT network safety (conservative) vs speed (aggressive).
+type SafetyMode string
+
+const (
+	SafetyConservative SafetyMode = "conservative" // longer timeouts, lower parallelism, optional delay/jitter
+	SafetyNormal       SafetyMode = "normal"       // default
+	SafetyAggressive   SafetyMode = "aggressive"   // shorter timeouts, higher parallelism
+)
+
+// isProbeTimeout reports whether err is a timeout (context deadline or net timeout).
+// Used to set StatusTimeout instead of generic transport/unreachable in probe flows.
+func isProbeTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
 
 // ProbeStage indicates the last stage reached during a rack/slot probe.
 type ProbeStage string
@@ -64,14 +93,21 @@ type RackSlotProbeRequest struct {
 	RackMax     int           // default 7
 	SlotMin     int           // default 0
 	SlotMax     int           // default 31
-	Timeout     time.Duration // per-attempt timeout; default 2s
-	Parallelism int           // concurrent probes; default 4
+	Timeout     time.Duration // per-attempt timeout; default from SafetyMode
+	Parallelism int           // concurrent probes; default from SafetyMode
 	DelayMS     int           // delay between attempts in ms; default 0
 	StopOnFirst bool          // stop after first valid candidate (any valid in non-strict)
 
 	// Optional manual TSAP override (bypasses rack/slot-derived TSAP).
 	LocalTSAP  *uint16
 	RemoteTSAP *uint16
+
+	// SafetyMode affects default Timeout, Parallelism, DelayMS when not explicitly set.
+	SafetyMode SafetyMode
+	// JitterMS adds random [0, JitterMS] ms before each attempt to spread load. 0 = no jitter.
+	JitterMS int
+	// MaxAttemptsPerHost caps total (rack,slot) attempts for this host; 0 = no limit.
+	MaxAttemptsPerHost int
 
 	// Strict mode: only count valid-query as valid; run follow-up confirmation.
 	Strict bool
@@ -87,17 +123,17 @@ type RackSlotProbeRequest struct {
 
 // RackSlotCandidate holds the probe result for a single rack/slot pair.
 type RackSlotCandidate struct {
-	Rack       int    `json:"rack"`
-	Slot       int    `json:"slot"`
-	LocalTSAP  uint16 `json:"localTsap"`
-	RemoteTSAP uint16 `json:"remoteTsap"`
+	Rack       int
+	Slot       int
+	LocalTSAP  uint16
+	RemoteTSAP uint16
 
-	Stage       ProbeStage       `json:"stage"`
-	Status      ProbeStatus      `json:"status"`
-	PDUSize     int              `json:"pduSize,omitempty"`
-	ConfirmedBy ConfirmationKind `json:"confirmedBy,omitempty"`
-	Confidence  Confidence       `json:"confidence"`
-	Error       string           `json:"error,omitempty"`
+	Stage       ProbeStage
+	Status      ProbeStatus
+	PDUSize     int
+	ConfirmedBy ConfirmationKind
+	Confidence  Confidence
+	Error       string
 }
 
 // RackSlotProbeResult holds all candidates, the subset that are valid, and a summary.
@@ -111,6 +147,10 @@ type RackSlotProbeResult struct {
 	ConfirmedByQuery int // candidates with valid-query (strict validity)
 	Flaky            int // reserved for Phase 2
 	TCPOnly          int // tcp-only count
+
+	// StoppedEarly is true when probing stopped due to MaxAttemptsPerHost before all candidates were tried.
+	StoppedEarly  bool
+	StoppedReason string // e.g. "max_attempts_reached"
 }
 
 // ProbeRackSlots probes a single target IP for valid rack/slot combinations.
@@ -119,6 +159,9 @@ type RackSlotProbeResult struct {
 // With Strict, "valid" means only valid-query (setup accepted and confirmed by follow-up).
 func ProbeRackSlots(ctx context.Context, req RackSlotProbeRequest) (*RackSlotProbeResult, error) {
 	applyProbeDefaults(&req)
+	if err := validateRackSlotProbeRequest(req); err != nil {
+		return nil, err
+	}
 
 	type job struct {
 		rack int
@@ -132,26 +175,51 @@ func ProbeRackSlots(ctx context.Context, req RackSlotProbeRequest) (*RackSlotPro
 		}
 	}
 
+	maxJobs := len(jobs)
+	if req.MaxAttemptsPerHost > 0 && maxJobs > req.MaxAttemptsPerHost {
+		maxJobs = req.MaxAttemptsPerHost
+	}
+
 	result := &RackSlotProbeResult{Address: req.Address}
+	if maxJobs < len(jobs) {
+		result.StoppedEarly = true
+		result.StoppedReason = "max_attempts_reached"
+	}
 	candidates := make([]RackSlotCandidate, len(jobs))
+
+	probeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var jitterRng *rand.Rand
+	if req.JitterMS > 0 {
+		jitterRng = jitterRNG()
+	}
 
 	sem := make(chan struct{}, req.Parallelism)
 	var wg sync.WaitGroup
-	stopCh := make(chan struct{})
 
 outer:
-	for i, j := range jobs {
+	for i := 0; i < maxJobs; i++ {
+		j := jobs[i]
 		select {
-		case <-ctx.Done():
-			break outer
-		case <-stopCh:
+		case <-probeCtx.Done():
 			break outer
 		default:
 		}
 
+		if req.JitterMS > 0 && jitterRng != nil {
+			jitter := time.Duration(jitterRng.Intn(req.JitterMS+1)) * time.Millisecond
+			if jitter > 0 {
+				select {
+				case <-probeCtx.Done():
+					break outer
+				case <-time.After(jitter):
+				}
+			}
+		}
 		if req.DelayMS > 0 && i > 0 {
 			select {
-			case <-ctx.Done():
+			case <-probeCtx.Done():
 				break outer
 			case <-time.After(time.Duration(req.DelayMS) * time.Millisecond):
 			}
@@ -161,13 +229,17 @@ outer:
 		rack := j.rack
 		slot := j.slot
 
-		sem <- struct{}{}
+		select {
+		case <-probeCtx.Done():
+			break outer
+		case sem <- struct{}{}:
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			c := probeOne(ctx, req, rack, slot)
+			c := probeOne(probeCtx, req, rack, slot)
 			candidates[idx] = c
 
 			// Stop on first valid: non-strict = any setup success; strict = first valid-query
@@ -176,10 +248,7 @@ outer:
 				validForStop = c.Status == StatusValidQuery
 			}
 			if validForStop && (req.StopOnFirst || req.StopOnFirstConfirmed) {
-				select {
-				case stopCh <- struct{}{}:
-				default:
-				}
+				cancel()
 			}
 		}()
 	}
@@ -217,6 +286,7 @@ outer:
 		}
 	}
 
+	// Only surface outer context cancellation; stop-on-first uses cancel() and we return result, nil
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -242,17 +312,36 @@ func applyProbeDefaults(req *RackSlotProbeRequest) {
 	if req.Port == 0 {
 		req.Port = 102
 	}
+	mode := req.SafetyMode
+	if mode == "" {
+		mode = SafetyNormal
+	}
 	if req.Timeout == 0 {
-		req.Timeout = 2 * time.Second
+		switch mode {
+		case SafetyConservative:
+			req.Timeout = 5 * time.Second
+		case SafetyAggressive:
+			req.Timeout = time.Second
+		default:
+			req.Timeout = 2 * time.Second
+		}
 	}
 	if req.Parallelism < 1 {
-		req.Parallelism = 4
+		switch mode {
+		case SafetyConservative:
+			req.Parallelism = 2
+		case SafetyAggressive:
+			req.Parallelism = 8
+		default:
+			req.Parallelism = 4
+		}
+	}
+	if req.DelayMS == 0 && mode == SafetyConservative {
+		req.DelayMS = 50
 	}
 	if req.Strict && req.Confirm == ConfirmNone {
 		req.Confirm = ConfirmAny
 	}
-	// RackMax and SlotMax are not defaulted: 0 is a valid rack/slot number.
-	// Use DefaultRackSlotProbeRequest for a full-range scan.
 }
 
 // runFollowUp sends a benign S7 request (SZL) on the existing conn and returns whether it succeeded.
@@ -283,6 +372,9 @@ func runFollowUp(ctx context.Context, conn *transport.Conn, pduRef uint16, strat
 		if err != nil {
 			return false, err.Error()
 		}
+		if hdr.PDURef != pduRef {
+			return false, fmt.Sprintf("PDU ref mismatch: expected %d got %d", pduRef, hdr.PDURef)
+		}
 		if hdr.ErrorClass != 0 || hdr.ErrorCode != 0 {
 			return false, fmt.Sprintf("S7 error 0x%02X/0x%02X", hdr.ErrorClass, hdr.ErrorCode)
 		}
@@ -291,7 +383,7 @@ func runFollowUp(ctx context.Context, conn *transport.Conn, pduRef uint16, strat
 			return false, "short S7 payload"
 		}
 		dataSlice := rest[hdr.ParamLength : hdr.ParamLength+hdr.DataLength]
-		if _, err := wire.ParseSZLResponse(nil, dataSlice); err != nil {
+		if _, err := wire.ParseSZLResponse(dataSlice); err != nil {
 			return false, err.Error()
 		}
 		return true, ""
@@ -330,121 +422,70 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 	c := RackSlotCandidate{Rack: rack, Slot: slot, Confidence: ConfidenceNone}
 
 	addr := net.JoinHostPort(req.Address, fmt.Sprint(req.Port))
-	dialer := net.Dialer{Timeout: req.Timeout}
-	netConn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialTransport(ctx, addr, req.Timeout)
 	if err != nil {
 		c.Stage = ProbeStageTCP
-		c.Status = StatusUnreachable
+		if isProbeTimeout(err) {
+			c.Status = StatusTimeout
+		} else {
+			c.Status = StatusUnreachable
+		}
 		c.Error = err.Error()
 		return c
 	}
-
-	conn := transport.New(netConn, req.Timeout)
 	defer func() { _ = conn.Close() }()
 
 	var localTSAP, remoteTSAP uint16
 	if req.LocalTSAP != nil {
 		localTSAP = *req.LocalTSAP
 	} else {
-		localTSAP = wire.BuildTSAP(1, 0, 0)
+		var err error
+		localTSAP, err = wire.BuildTSAP(1, 0, 0)
+		if err != nil {
+			c.Error = err.Error()
+			c.Status = StatusRejected
+			return c
+		}
 	}
 	if req.RemoteTSAP != nil {
 		remoteTSAP = *req.RemoteTSAP
 	} else {
-		remoteTSAP = wire.BuildTSAP(3, rack, slot)
+		var err error
+		remoteTSAP, err = wire.BuildTSAP(3, rack, slot)
+		if err != nil {
+			c.Error = err.Error()
+			c.Status = StatusRejected
+			return c
+		}
 	}
 	c.LocalTSAP = localTSAP
 	c.RemoteTSAP = remoteTSAP
 
-	// COTP connect
-	crBytes, err := wire.EncodeCOTPCR(localTSAP, remoteTSAP)
-	if err != nil {
-		c.Stage = ProbeStageTCP
-		c.Status = StatusTCPOnly
-		c.Error = fmt.Sprintf("COTP encode: %s", err)
-		return c
-	}
-	if err := conn.SendContext(ctx, crBytes); err != nil {
-		c.Stage = ProbeStageTCP
-		c.Status = StatusTCPOnly
-		c.Error = fmt.Sprintf("COTP send: %s", err)
-		return c
-	}
-	resp, err := conn.ReceiveContext(ctx)
-	if err != nil {
-		c.Stage = ProbeStageTCP
-		c.Status = StatusTCPOnly
-		c.Error = fmt.Sprintf("COTP recv: %s", err)
-		return c
-	}
-	dec, err := cotp.Decode(resp)
-	if err != nil {
-		c.Stage = ProbeStageTCP
-		c.Status = StatusTCPOnly
-		c.Error = fmt.Sprintf("COTP parse: %s", err)
-		return c
-	}
-	if dec.Type != cotp.TypeCC {
+	if err := performCOTPConnect(ctx, conn, localTSAP, remoteTSAP); err != nil {
 		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("expected COTP CC, got %s", dec.Type)
+		if isProbeTimeout(err) {
+			c.Status = StatusTimeout
+		} else {
+			c.Status = StatusTCPOnly
+		}
+		c.Error = err.Error()
 		return c
 	}
-
-	// S7 setup
-	setupReq := wire.EncodeSetupCommRequest(1, 1, 480)
-	setupDT, err := wire.EncodeCOTPDT(setupReq)
-	if err != nil {
-		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("S7 setup encode: %s", err)
-		return c
-	}
-	if err := conn.SendContext(ctx, setupDT); err != nil {
-		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("S7 setup send: %s", err)
-		return c
-	}
-	resp, err = conn.ReceiveContext(ctx)
-	if err != nil {
-		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("S7 setup recv: %s", err)
-		return c
-	}
-	dec, err = cotp.Decode(resp)
-	if err != nil {
-		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("S7 setup COTP parse: %s", err)
-		return c
-	}
-	if dec.DT == nil {
-		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("expected COTP DT, got %s", dec.Type)
-		return c
-	}
-	s7Data := dec.DT.UserData
-	header, paramData, err := wire.ParseS7Header(s7Data)
+	setupRef := uint16(1)
+	setup, err := performS7Setup(ctx, conn, setupRef, 1, 1, 480)
 	if err != nil {
 		c.Stage = ProbeStageSetup
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("S7 header parse: %s", err)
-		return c
-	}
-	if header.ErrorClass != 0 || header.ErrorCode != 0 {
-		c.Stage = ProbeStageSetup
-		c.Status = StatusRejected
-		c.Error = fmt.Sprintf("S7 error 0x%02X/0x%02X", header.ErrorClass, header.ErrorCode)
-		return c
-	}
-	setup, err := wire.ParseSetupCommResponse(paramData)
-	if err != nil {
-		c.Stage = ProbeStageSetup
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("setup comm parse: %s", err)
+		if isProbeTimeout(err) {
+			c.Status = StatusTimeout
+		} else {
+			var s7Err *wire.S7Error
+			if errors.As(err, &s7Err) {
+				c.Status = StatusRejected
+			} else {
+				c.Status = StatusCOTPOnly
+			}
+		}
+		c.Error = err.Error()
 		return c
 	}
 	c.PDUSize = setup.PDUSize
@@ -456,9 +497,9 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		return c
 	}
 
-	// Strict: run follow-up confirmation
 	c.Stage = ProbeStageQuery
-	ok, confirmedBy, errStr := runFollowUp(ctx, conn, 2, req.Confirm)
+	followUpRef := setupRef + 1
+	ok, confirmedBy, errStr := runFollowUp(ctx, conn, followUpRef, req.Confirm)
 	if ok {
 		c.Status = StatusValidQuery
 		c.ConfirmedBy = confirmedBy

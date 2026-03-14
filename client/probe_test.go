@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"strconv"
 	"testing"
@@ -73,6 +74,97 @@ func TestApplyProbeDefaultsPreservesExplicit(t *testing.T) {
 	}
 	if req.Parallelism != 8 {
 		t.Errorf("Parallelism should not be overwritten: got %d", req.Parallelism)
+	}
+}
+
+// TestProbeRackSlotsValidationInvalidRange ensures invalid rack/slot ranges return ValidationError.
+func TestProbeRackSlotsValidationInvalidRange(t *testing.T) {
+	_, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address: "127.0.0.1", Port: 102,
+		RackMin: 2, RackMax: 0, SlotMin: 0, SlotMax: 1,
+	})
+	if err == nil {
+		t.Fatal("expected error for RackMin > RackMax")
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Errorf("expected ValidationError, got %T: %v", err, err)
+	}
+	_, err = ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address: "127.0.0.1", Port: 102,
+		RackMin: 0, RackMax: 1, SlotMin: 5, SlotMax: 2,
+	})
+	if err == nil {
+		t.Fatal("expected error for SlotMin > SlotMax")
+	}
+	if !errors.As(err, &ve) {
+		t.Errorf("expected ValidationError, got %T: %v", err, err)
+	}
+}
+
+// TestProbeRackSlotsMaxAttemptsPerHost verifies that MaxAttemptsPerHost caps attempts and sets StoppedEarly/StoppedReason.
+func TestProbeRackSlotsMaxAttemptsPerHost(t *testing.T) {
+	// Many candidates (e.g. 4) but max 2 attempts → only 2 tried, StoppedEarly true.
+	result, err := ProbeRackSlots(context.Background(), RackSlotProbeRequest{
+		Address:            "127.0.0.1",
+		Port:               1,
+		RackMin:            0,
+		RackMax:            1,
+		SlotMin:            0,
+		SlotMax:            1,
+		Timeout:            50 * time.Millisecond,
+		Parallelism:        1,
+		MaxAttemptsPerHost: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.StoppedEarly {
+		t.Error("expected StoppedEarly true when MaxAttemptsPerHost=2 and 4 candidates")
+	}
+	if result.StoppedReason != "max_attempts_reached" {
+		t.Errorf("StoppedReason = %q, want max_attempts_reached", result.StoppedReason)
+	}
+	// Only 2 of 4 candidates were attempted (others are zero value)
+	attempted := 0
+	for _, c := range result.Candidates {
+		if c.Status != "" || c.Stage != "" {
+			attempted++
+		}
+	}
+	if attempted != 2 {
+		t.Errorf("expected 2 candidates attempted, got %d", attempted)
+	}
+}
+
+// TestProbeRackSlotsSafetyMode verifies SafetyConservative applies longer timeout and lower parallelism.
+func TestProbeRackSlotsSafetyMode(t *testing.T) {
+	req := RackSlotProbeRequest{
+		Address:    "127.0.0.1",
+		Port:       102,
+		RackMin:    0,
+		RackMax:    0,
+		SlotMin:    0,
+		SlotMax:    0,
+		SafetyMode: SafetyConservative,
+	}
+	applyProbeDefaults(&req)
+	if req.Timeout != 5*time.Second {
+		t.Errorf("SafetyConservative timeout = %v, want 5s", req.Timeout)
+	}
+	if req.Parallelism != 2 {
+		t.Errorf("SafetyConservative parallelism = %d, want 2", req.Parallelism)
+	}
+	if req.DelayMS != 50 {
+		t.Errorf("SafetyConservative DelayMS = %d, want 50", req.DelayMS)
+	}
+	req = RackSlotProbeRequest{Address: "x", SafetyMode: SafetyAggressive}
+	applyProbeDefaults(&req)
+	if req.Timeout != time.Second {
+		t.Errorf("SafetyAggressive timeout = %v, want 1s", req.Timeout)
+	}
+	if req.Parallelism != 8 {
+		t.Errorf("SafetyAggressive parallelism = %d, want 8", req.Parallelism)
 	}
 }
 
@@ -532,7 +624,7 @@ func TestProbeRackSlotsSetupOnly(t *testing.T) {
 		pduRef := binary.BigEndian.Uint16(s7[4:6])
 		setupResp := make([]byte, 20)
 		setupResp[0] = 0x32
-		setupResp[1] = wire.ROSCTRAckData
+		setupResp[1] = byte(wire.ROSCTRAckData)
 		binary.BigEndian.PutUint16(setupResp[4:6], pduRef)
 		binary.BigEndian.PutUint16(setupResp[6:8], 8)
 		setupResp[12] = wire.FuncSetupComm
@@ -597,7 +689,7 @@ func TestProbeRackSlotsStrictWithSZL(t *testing.T) {
 		pduRef := binary.BigEndian.Uint16(s7[4:6])
 		setupResp := make([]byte, 20)
 		setupResp[0] = 0x32
-		setupResp[1] = wire.ROSCTRAckData
+		setupResp[1] = byte(wire.ROSCTRAckData)
 		binary.BigEndian.PutUint16(setupResp[4:6], pduRef)
 		binary.BigEndian.PutUint16(setupResp[6:8], 8)
 		setupResp[12] = wire.FuncSetupComm
@@ -616,7 +708,7 @@ func TestProbeRackSlotsStrictWithSZL(t *testing.T) {
 		pduRef = binary.BigEndian.Uint16(s7[4:6])
 		szlResp := make([]byte, 12+2+30)
 		szlResp[0] = 0x32
-		szlResp[1] = wire.ROSCTRAckData
+		szlResp[1] = byte(wire.ROSCTRAckData)
 		binary.BigEndian.PutUint16(szlResp[4:6], pduRef)
 		binary.BigEndian.PutUint16(szlResp[6:8], 2)
 		binary.BigEndian.PutUint16(szlResp[8:10], 30)
@@ -684,7 +776,7 @@ func TestProbeRackSlotsStrictWithCPUState(t *testing.T) {
 		pduRef := binary.BigEndian.Uint16(s7[4:6])
 		setupResp := make([]byte, 20)
 		setupResp[0] = 0x32
-		setupResp[1] = wire.ROSCTRAckData
+		setupResp[1] = byte(wire.ROSCTRAckData)
 		binary.BigEndian.PutUint16(setupResp[4:6], pduRef)
 		binary.BigEndian.PutUint16(setupResp[6:8], 8)
 		setupResp[12] = wire.FuncSetupComm
@@ -704,7 +796,7 @@ func TestProbeRackSlotsStrictWithCPUState(t *testing.T) {
 		pduRef = binary.BigEndian.Uint16(s7[4:6])
 		szlResp := make([]byte, 12+2+12)
 		szlResp[0] = 0x32
-		szlResp[1] = wire.ROSCTRAckData
+		szlResp[1] = byte(wire.ROSCTRAckData)
 		binary.BigEndian.PutUint16(szlResp[4:6], pduRef)
 		binary.BigEndian.PutUint16(szlResp[6:8], 2)
 		binary.BigEndian.PutUint16(szlResp[8:10], 12)
@@ -742,5 +834,23 @@ func TestProbeRackSlotsStrictWithCPUState(t *testing.T) {
 	c := result.Candidates[0]
 	if c.Status != StatusValidQuery {
 		t.Errorf("Status: got %q, want %q", c.Status, StatusValidQuery)
+	}
+}
+
+func BenchmarkProbeRackSlots(b *testing.B) {
+	ctx := context.Background()
+	req := RackSlotProbeRequest{
+		Address:     "127.0.0.1",
+		Port:        7,
+		RackMin:     0,
+		RackMax:     1,
+		SlotMin:     0,
+		SlotMax:     1,
+		Timeout:     5 * time.Millisecond,
+		Parallelism: 2,
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = ProbeRackSlots(ctx, req)
 	}
 }

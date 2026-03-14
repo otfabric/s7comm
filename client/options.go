@@ -3,7 +3,7 @@ package client
 
 import "time"
 
-// Option configures the S7 client
+// Option configures the S7 client. Options are immutable after construction.
 type Option func(*options)
 
 type options struct {
@@ -23,7 +23,7 @@ type options struct {
 	maxAmqCalled  int
 }
 
-// Logger interface for client logging
+// Logger interface for client logging. Args are printf-style (e.g. Debug("msg: %v", err)).
 type Logger interface {
 	Debug(msg string, args ...interface{})
 	Info(msg string, args ...interface{})

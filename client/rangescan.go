@@ -1,9 +1,8 @@
 package client
 
 import (
+	"bytes"
 	"context"
-	"errors"
-	"sync"
 	"time"
 
 	"github.com/otfabric/s7comm/model"
@@ -11,6 +10,8 @@ import (
 
 // RangeProbeRequest configures a read-range scan over an area.
 // The client must be connected; the scan uses the client's connection.
+// Probes run over the single connection and are serialized by request mutex, so Parallelism > 1
+// does not yield concurrent wire activity; it is retained for API consistency with other probe APIs.
 type RangeProbeRequest struct {
 	Area        model.Area
 	DBNumber    int
@@ -22,7 +23,7 @@ type RangeProbeRequest struct {
 	RetryDelay  time.Duration
 	Repeat      int // repeat each probe N times for stability
 	Interval    time.Duration
-	Parallelism int // max concurrent probes; if <=0, sequential
+	Parallelism int // max concurrent probes; if <=0, sequential. API compatibility only—connection-backed probes are serialized, no concurrent wire I/O.
 }
 
 // ReadProbeObservation is one probe at one offset.
@@ -63,7 +64,11 @@ type RangeProbeResult struct {
 
 // ProbeReadableRanges scans the area in the configured range and consolidates adjacent readable probes into spans.
 // The client must be connected when the range is non-empty. The scan is read-only.
+// Invalid request (start > end, negative DBNumber for DB area) returns an error.
 func (c *Client) ProbeReadableRanges(ctx context.Context, req RangeProbeRequest) (*RangeProbeResult, error) {
+	if err := validateRangeProbeRequest(req); err != nil {
+		return nil, err
+	}
 	step := req.Step
 	if step <= 0 {
 		step = req.ProbeSize
@@ -88,46 +93,20 @@ func (c *Client) ProbeReadableRanges(ctx context.Context, req RangeProbeRequest)
 		conn := c.conn
 		c.mu.RUnlock()
 		if conn == nil {
-			return nil, errors.New("client not connected")
+			return nil, ErrNotConnected
 		}
 	}
 
 	observations := make([]ReadProbeObservation, len(offsets))
-	var mu sync.Mutex
-	parallelism := req.Parallelism
-	if parallelism < 1 {
-		parallelism = 1
-	}
-	sem := make(chan struct{}, parallelism)
-	var wg sync.WaitGroup
-
+	// Connection-backed probes are serialized by reqMu; force sequential execution to match actual behavior.
 	for i, offset := range offsets {
-		select {
-		case <-ctx.Done():
-			wg.Wait()
-			return out, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return out, err
 		}
-
-		i, offset := i, offset
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			obs := c.probeOneOffset(ctx, req, offset, probeSize)
-			obs.Offset = offset
-			obs.Request = model.Address{Area: req.Area, DBNumber: req.DBNumber, Start: offset, Size: probeSize}
-			mu.Lock()
-			observations[i] = obs
-			mu.Unlock()
-		}()
-	}
-
-	wg.Wait()
-	if err := ctx.Err(); err != nil {
-		return out, err
+		obs := c.probeOneOffset(ctx, req, offset, probeSize)
+		obs.Offset = offset
+		obs.Request = model.Address{Area: req.Area, DBNumber: req.DBNumber, Start: offset, Size: probeSize}
+		observations[i] = obs
 	}
 
 	out.Probes = observations
@@ -144,16 +123,21 @@ func (c *Client) probeOneOffset(ctx context.Context, req RangeProbeRequest, offs
 	}
 	var repeated []*ReadResult
 	for r := 0; r < repeat; r++ {
+		if err := ctx.Err(); err != nil {
+			obs := ReadProbeObservation{Offset: offset, Request: addr, Result: *newFailedReadResult(probeSize, err)}
+			return obs
+		}
 		if r > 0 && req.Interval > 0 {
 			select {
 			case <-ctx.Done():
-				break
+				obs := ReadProbeObservation{Offset: offset, Request: addr, Result: *newFailedReadResult(probeSize, ctx.Err())}
+				return obs
 			case <-time.After(req.Interval):
 			}
 		}
 		res, err := c.ReadArea(ctx, addr)
 		if err != nil {
-			repeated = append(repeated, &ReadResult{Status: ReadStatusTransportErr, Error: err.Error(), RequestedLength: probeSize, ReturnedLength: 0})
+			repeated = append(repeated, newFailedReadResult(probeSize, err))
 			continue
 		}
 		repeated = append(repeated, res)
@@ -161,7 +145,7 @@ func (c *Client) probeOneOffset(ctx context.Context, req RangeProbeRequest, offs
 
 	obs := ReadProbeObservation{}
 	if len(repeated) == 0 {
-		obs.Result = ReadResult{Status: ReadStatusTransportErr, Error: "no reads", RequestedLength: probeSize, ReturnedLength: 0}
+		obs.Result = ReadResult{Status: ReadStatusTransportErr, Message: "no reads", RequestedLength: probeSize, ReturnedLength: 0}
 		return obs
 	}
 
@@ -169,30 +153,35 @@ func (c *Client) probeOneOffset(ctx context.Context, req RangeProbeRequest, offs
 	if repeat > 1 && len(repeated) > 1 {
 		mixed := false
 		for j := 1; j < len(repeated); j++ {
-			if repeated[j].Status != repeated[0].Status || !byteSlicesEqual(repeated[j].Data, repeated[0].Data) {
+			if repeated[j].Status != repeated[0].Status || !bytes.Equal(repeated[j].Data, repeated[0].Data) {
 				mixed = true
 				break
 			}
 		}
 		if mixed {
 			obs.Result.Status = ReadStatusInconclusive
-			obs.Result.Error = "repeat reads produced mixed results"
+			obs.Result.Message = "repeat reads produced mixed results"
 		}
 	}
 
 	if req.Retries > 0 {
 		var attemptResults []*ReadResult
 		for attempt := 0; attempt <= req.Retries; attempt++ {
+			if err := ctx.Err(); err != nil {
+				obs.Result = *newFailedReadResult(probeSize, err)
+				return obs
+			}
 			if attempt > 0 && req.RetryDelay > 0 {
 				select {
 				case <-ctx.Done():
-					break
+					obs.Result = *newFailedReadResult(probeSize, ctx.Err())
+					return obs
 				case <-time.After(req.RetryDelay):
 				}
 			}
 			res, err := c.ReadArea(ctx, addr)
 			if err != nil {
-				attemptResults = append(attemptResults, &ReadResult{Status: ReadStatusTransportErr, Error: err.Error(), RequestedLength: probeSize, ReturnedLength: 0})
+				attemptResults = append(attemptResults, newFailedReadResult(probeSize, err))
 				continue
 			}
 			attemptResults = append(attemptResults, res)
@@ -200,14 +189,14 @@ func (c *Client) probeOneOffset(ctx context.Context, req RangeProbeRequest, offs
 		if len(attemptResults) > 1 {
 			allSame := true
 			for j := 1; j < len(attemptResults); j++ {
-				if attemptResults[j].Status != attemptResults[0].Status || !byteSlicesEqual(attemptResults[j].Data, attemptResults[0].Data) {
+				if attemptResults[j].Status != attemptResults[0].Status || !bytes.Equal(attemptResults[j].Data, attemptResults[0].Data) {
 					allSame = false
 					break
 				}
 			}
 			if !allSame {
 				obs.Result.Status = ReadStatusInconclusive
-				obs.Result.Error = "retries produced mixed results"
+				obs.Result.Message = "retries produced mixed results"
 			}
 		}
 	}
@@ -216,7 +205,7 @@ func (c *Client) probeOneOffset(ctx context.Context, req RangeProbeRequest, offs
 		allSame := true
 		allZero := true
 		for _, r := range repeated {
-			if r.Status != repeated[0].Status || !byteSlicesEqual(r.Data, repeated[0].Data) {
+			if r.Status != repeated[0].Status || !bytes.Equal(r.Data, repeated[0].Data) {
 				allSame = false
 			}
 			if r.Status == ReadStatusSuccess && len(r.Data) > 0 {
@@ -235,18 +224,6 @@ func (c *Client) probeOneOffset(ctx context.Context, req RangeProbeRequest, offs
 	}
 
 	return obs
-}
-
-func byteSlicesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // ConsolidateSpans merges adjacent probes (by step) with the same status into spans and fills the summary.
@@ -278,6 +255,38 @@ func ConsolidateSpans(observations []ReadProbeObservation, step, probeSize int) 
 			j++
 		}
 		span := ReadableSpan{Start: start, End: end, Status: status}
+		// Merge Stable/AllZero from run when all agree; note when they differ
+		var stableVal, allZeroVal *bool
+		for k := i; k < j; k++ {
+			obs := observations[k]
+			if obs.Stable != nil {
+				if stableVal == nil {
+					stableVal = obs.Stable
+				} else if *stableVal != *obs.Stable {
+					stableVal = nil
+					span.Notes = append(span.Notes, "stable metadata differs across probes")
+					break
+				}
+			}
+		}
+		if stableVal != nil {
+			span.Stable = stableVal
+		}
+		for k := i; k < j; k++ {
+			obs := observations[k]
+			if obs.AllZero != nil {
+				if allZeroVal == nil {
+					allZeroVal = obs.AllZero
+				} else if *allZeroVal != *obs.AllZero {
+					allZeroVal = nil
+					span.Notes = append(span.Notes, "allZero metadata differs across probes")
+					break
+				}
+			}
+		}
+		if allZeroVal != nil {
+			span.AllZero = allZeroVal
+		}
 		spans = append(spans, span)
 		byStatus[status] = append(byStatus[status], span)
 		i = j

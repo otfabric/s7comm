@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -29,7 +30,7 @@ func TestNewS7Error(t *testing.T) {
 		t.Fatalf("NewS7Error(access, 0x04): got %q", e.Message)
 	}
 	e = NewS7Error(ErrClassAccess, 0xFF)
-	if e.Message != "access error" {
+	if e.Message != "access error code=0xFF" {
 		t.Fatalf("NewS7Error(access, 0xFF): got %q", e.Message)
 	}
 	e = NewS7Error(ErrClassObject, 0)
@@ -43,6 +44,27 @@ func TestNewS7Error(t *testing.T) {
 	e = NewS7Error(0x00, 0)
 	if e.Message != "" {
 		t.Fatalf("NewS7Error(no error class): expected empty message, got %q", e.Message)
+	}
+}
+
+func TestHeaderErrorString(t *testing.T) {
+	if got := HeaderErrorString(ErrClassNoError, 0); got != "" {
+		t.Errorf("HeaderErrorString(no error): got %q", got)
+	}
+	if got := HeaderErrorString(ErrClassAccess, 0x01); got != "invalid address" {
+		t.Errorf("HeaderErrorString(access, 0x01): got %q", got)
+	}
+	if got := HeaderErrorString(0xFF, 0xAB); got == "" {
+		t.Error("HeaderErrorString(unknown): expected non-empty")
+	}
+}
+
+func TestItemReturnCodeString(t *testing.T) {
+	if got := ItemReturnCodeString(RetCodeSuccess); got != "success" {
+		t.Errorf("ItemReturnCodeString(success): got %q", got)
+	}
+	if got := ItemReturnCodeString(RetCodeAccessFault); got != "access denied" {
+		t.Errorf("ItemReturnCodeString(access): got %q", got)
 	}
 }
 
@@ -74,5 +96,10 @@ func TestReturnCodeError(t *testing.T) {
 	err := ReturnCodeError(0x99)
 	if err == nil || err.Error() != "return code 0x99" {
 		t.Fatalf("ReturnCodeError(unknown): got %v", err)
+	}
+	// S7Error must preserve raw Code for item return codes
+	var s7err *S7Error
+	if errors.As(err, &s7err) && s7err.Code != 0x99 {
+		t.Errorf("S7Error.Code = 0x%02X, want 0x99", s7err.Code)
 	}
 }

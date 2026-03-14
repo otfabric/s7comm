@@ -49,7 +49,7 @@ func InspectFrame(frame []byte) (*FrameSummary, error) {
 		return nil, fmt.Errorf("parse s7 header: %w", err)
 	}
 
-	s.ROSCTR = h.ROSCTR
+	s.ROSCTR = byte(h.ROSCTR)
 	s.ParamLength = int(h.ParamLength)
 	s.DataLength = int(h.DataLength)
 	s.ErrorClass = h.ErrorClass

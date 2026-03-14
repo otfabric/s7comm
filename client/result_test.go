@@ -21,13 +21,17 @@ func TestReadResult_OK(t *testing.T) {
 }
 
 func TestReadResult_Err(t *testing.T) {
-	if (*ReadResult)(nil).Err() == nil {
+	nilErr := (*ReadResult)(nil).Err()
+	if nilErr == nil {
 		t.Error("Err() should be non-nil for nil result")
+	}
+	if !errors.Is(nilErr, ErrNilReadResult) {
+		t.Errorf("nil receiver Err() should return ErrNilReadResult, got %v", nilErr)
 	}
 	if (&ReadResult{Status: ReadStatusSuccess}).Err() != nil {
 		t.Error("Err() should be nil for success")
 	}
-	err := (&ReadResult{Status: ReadStatusEmptyRead, Error: "no data"}).Err()
+	err := (&ReadResult{Status: ReadStatusEmptyRead, Message: "no data"}).Err()
 	if err == nil {
 		t.Fatal("Err() should be non-nil for empty-read")
 	}
@@ -47,6 +51,27 @@ func TestReadOutcomeError_Error(t *testing.T) {
 	e := &ReadOutcomeError{Result: &ReadResult{Status: ReadStatusRejected}, message: "rejected"}
 	if e.Error() != "rejected" {
 		t.Errorf("Error() = %q", e.Error())
+	}
+}
+
+func TestReadOutcomeError_Unwrap(t *testing.T) {
+	sentinel := errors.New("underlying")
+	r := &ReadResult{Status: ReadStatusTransportErr, Message: "failed", Cause: sentinel}
+	err := r.Err()
+	if err == nil {
+		t.Fatal("Err() should be non-nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Error("errors.Is(err, sentinel) should be true when Cause is set")
+	}
+	var out *ReadOutcomeError
+	if !errors.As(err, &out) || out.Unwrap() != sentinel {
+		t.Errorf("Unwrap() should return Cause, got %v", out.Unwrap())
+	}
+	// Nil cause: Unwrap returns nil
+	r2 := &ReadResult{Status: ReadStatusEmptyRead, Message: "no data"}
+	if r2.Err().(*ReadOutcomeError).Unwrap() != nil {
+		t.Error("Unwrap() should be nil when Cause is not set")
 	}
 }
 

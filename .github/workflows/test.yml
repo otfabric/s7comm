@@ -47,6 +47,11 @@ jobs:
       - name: Test
         run: go test -count=1 -race ./...
 
+      - name: Fuzz smoke (wire)
+        run: go test -count=1 -fuzz=FuzzParseS7Header -fuzztime=1s ./wire/...
+      - name: Fuzz smoke (wire read var)
+        run: go test -count=1 -fuzz=FuzzParseReadVarResponse -fuzztime=1s ./wire/...
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

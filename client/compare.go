@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"sync"
 	"time"
 
 	"github.com/otfabric/s7comm/model"
@@ -24,6 +25,9 @@ type CompareReadRequest struct {
 	Offset     int
 	Size       int
 	Timeout    time.Duration
+	// Parallelism limits concurrent connections. Zero or negative is treated as 1 (sequential).
+	// Results remain in candidate order. Aligns with probe/discovery parallelism options.
+	Parallelism int
 }
 
 // CompareReadCandidate holds one candidate's read result.
@@ -33,17 +37,33 @@ type CompareReadCandidate struct {
 	Result ReadResult
 }
 
-// CompareReadResult holds one ReadResult per candidate and whether all successful results were identical.
+// CompareReadResult holds one ReadResult per candidate and whether all candidates agreed.
+// RackSlotInsensitive is true only when every candidate succeeded and all returned identical data.
 type CompareReadResult struct {
 	Request             CompareReadRequest
 	ByCandidate         []CompareReadCandidate
 	RackSlotInsensitive bool
 }
 
+// compareCandidateFailure builds a CompareReadCandidate for a failed read.
+func compareCandidateFailure(c RackSlot, size int, err error) CompareReadCandidate {
+	return CompareReadCandidate{
+		Rack:   c.Rack,
+		Slot:   c.Slot,
+		Result: *newFailedReadResult(size, err),
+	}
+}
+
 // CompareRead performs the same read for each rack/slot candidate and reports whether results are identical.
-// Each candidate uses a new connection (connect, read, close). If all candidates return ReadStatusSuccess
-// and the returned data is identical, RackSlotInsensitive is set true.
+// Use it to test whether a target responds identically across multiple rack/slot candidates.
+// Each candidate uses a new connection (connect, read, close). If Parallelism > 1, up to that many
+// connections run concurrently; results are still in candidate order. If all candidates return
+// ReadStatusSuccess and the returned data is identical, RackSlotInsensitive is set true.
+// Invalid request (negative size/offset/DBNumber for DB) returns an error.
 func CompareRead(ctx context.Context, req CompareReadRequest) (*CompareReadResult, error) {
+	if err := validateCompareReadRequest(req); err != nil {
+		return nil, err
+	}
 	out := &CompareReadResult{Request: req}
 	if len(req.Candidates) == 0 {
 		return out, nil
@@ -58,29 +78,46 @@ func CompareRead(ctx context.Context, req CompareReadRequest) (*CompareReadResul
 		timeout = 5 * time.Second
 	}
 
-	for _, cand := range req.Candidates {
-		c := New(req.Address, WithPort(port), WithRackSlot(cand.Rack, cand.Slot), WithTimeout(timeout))
-		if err := c.Connect(ctx); err != nil {
-			out.ByCandidate = append(out.ByCandidate, CompareReadCandidate{
-				Rack:   cand.Rack,
-				Slot:   cand.Slot,
-				Result: ReadResult{Status: ReadStatusTransportErr, Error: err.Error(), RequestedLength: req.Size, ReturnedLength: 0},
-			})
-			_ = c.Close()
-			continue
-		}
-		res, err := c.ReadArea(ctx, model.Address{Area: req.Area, DBNumber: req.DBNumber, Start: req.Offset, Size: req.Size})
-		_ = c.Close()
-		if err != nil {
-			out.ByCandidate = append(out.ByCandidate, CompareReadCandidate{
-				Rack:   cand.Rack,
-				Slot:   cand.Slot,
-				Result: ReadResult{Status: ReadStatusTransportErr, Error: err.Error(), RequestedLength: req.Size, ReturnedLength: 0},
-			})
-			continue
-		}
-		out.ByCandidate = append(out.ByCandidate, CompareReadCandidate{Rack: cand.Rack, Slot: cand.Slot, Result: *res})
+	results := make([]CompareReadCandidate, len(req.Candidates))
+	var wg sync.WaitGroup
+	parallelism := req.Parallelism
+	if parallelism <= 0 {
+		parallelism = 1
 	}
+	sem := make(chan struct{}, parallelism)
+	for i, cand := range req.Candidates {
+		select {
+		case <-ctx.Done():
+			for j := i; j < len(req.Candidates); j++ {
+				results[j] = compareCandidateFailure(req.Candidates[j], req.Size, ctx.Err())
+			}
+			goto wait
+		case sem <- struct{}{}:
+		}
+		idx := i
+		cand := cand
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			c := New(req.Address, WithPort(port), WithRackSlot(cand.Rack, cand.Slot), WithTimeout(timeout))
+			if err := c.Connect(ctx); err != nil {
+				results[idx] = compareCandidateFailure(cand, req.Size, err)
+				_ = c.Close()
+				return
+			}
+			res, err := c.ReadArea(ctx, model.Address{Area: req.Area, DBNumber: req.DBNumber, Start: req.Offset, Size: req.Size})
+			_ = c.Close()
+			if err != nil {
+				results[idx] = compareCandidateFailure(cand, req.Size, err)
+				return
+			}
+			results[idx] = CompareReadCandidate{Rack: cand.Rack, Slot: cand.Slot, Result: *res}
+		}()
+	}
+wait:
+	wg.Wait()
+	out.ByCandidate = results
 
 	// Set RackSlotInsensitive if all succeeded and all Data is identical
 	if len(out.ByCandidate) < 2 {

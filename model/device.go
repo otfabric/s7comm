@@ -14,7 +14,9 @@ type DeviceInfo struct {
 	CPUFamily    string
 }
 
-// ConnectionInfo contains information about the established connection
+// ConnectionInfo contains a snapshot of the established connection and negotiated limits.
+// Obtained from client.ConnectionInfo(); safe to read when connected.
+// PDUSize is the negotiated maximum S7 PDU payload length in bytes (excluding TPKT/COTP framing).
 type ConnectionInfo struct {
 	Host          string
 	Port          int
@@ -22,7 +24,7 @@ type ConnectionInfo struct {
 	RemoteTSAP    uint16
 	Rack          int
 	Slot          int
-	PDUSize       int
+	PDUSize       int // negotiated max S7 PDU payload (bytes), excluding TPKT/COTP
 	MaxAmqCalling int
 	MaxAmqCalled  int
 }

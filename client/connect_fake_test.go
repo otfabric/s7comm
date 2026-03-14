@@ -60,7 +60,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 		// Build S7 setup response: 12-byte ack header + 8-byte setup param
 		resp := make([]byte, 20)
 		resp[0] = 0x32
-		resp[1] = wire.ROSCTRAckData
+		resp[1] = byte(wire.ROSCTRAckData)
 		binary.BigEndian.PutUint16(resp[4:6], pduRef)
 		binary.BigEndian.PutUint16(resp[6:8], 8)
 		binary.BigEndian.PutUint16(resp[8:10], 0)
@@ -109,7 +109,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -129,7 +129,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			const paramLen, dataLen = 2, 6
 			resp := make([]byte, 12+paramLen+dataLen)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], paramLen)
 			binary.BigEndian.PutUint16(resp[8:10], dataLen)
@@ -154,7 +154,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			const paramLen, dataLen = 2, 6
 			resp := make([]byte, 12+paramLen+dataLen)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], paramLen)
 			binary.BigEndian.PutUint16(resp[8:10], dataLen)
@@ -176,7 +176,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			writeResp := make([]byte, 12+2+1)
 			writeResp[0] = 0x32
-			writeResp[1] = wire.ROSCTRAckData
+			writeResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(writeResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(writeResp[6:8], 2)
 			writeResp[8] = 0
@@ -197,21 +197,23 @@ func TestConnectWithFakeServer(t *testing.T) {
 				s7 := dec.DT.UserData
 				pduRef := binary.BigEndian.Uint16(s7[4:6])
 				// SZL response: 12-byte header + 2 param + data (retCode, 0x09, dataLen, szlID, szlIndex, data)
-				// ParseSZLResponse: data[0]=retCode, [2:4]=dataLen, [4:6]=SZLID, [6:8]=SZLIndex, [8:]=Data
-				const szlParamLen, szlDataLen = 2, 30
+				// ParseSZLResponse bounds resp.Data to data[8:4+dataLen]; Identify needs >=20 (module) and >=34 (component)
+				const szlParamLen = 2
+				const szlPayloadLen = 38 // so resp.Data has 38 bytes (enough for component)
+				szlDataLen := 8 + szlPayloadLen
 				szlResp := make([]byte, 12+szlParamLen+szlDataLen)
 				szlResp[0] = 0x32
-				szlResp[1] = wire.ROSCTRAckData
+				szlResp[1] = byte(wire.ROSCTRAckData)
 				binary.BigEndian.PutUint16(szlResp[4:6], pduRef)
 				binary.BigEndian.PutUint16(szlResp[6:8], szlParamLen)
-				binary.BigEndian.PutUint16(szlResp[8:10], szlDataLen)
+				binary.BigEndian.PutUint16(szlResp[8:10], uint16(szlDataLen))
 				szlResp[10] = 0
 				szlResp[11] = 0
 				szlResp[14] = wire.RetCodeSuccess
 				szlResp[15] = 0x09
-				binary.BigEndian.PutUint16(szlResp[16:18], 22) // SZL data length
+				binary.BigEndian.PutUint16(szlResp[16:18], szlPayloadLen)
 				binary.BigEndian.PutUint16(szlResp[18:20], wire.SZLModuleID)
-				copy(szlResp[22:44], []byte("6ES7 315-2AG10-0AB0          ")) // resp.Data[2:22] for OrderNumber
+				copy(szlResp[22:44], []byte("6ES7 315-2AG10-0AB0          ")) // OrderNumber at resp.Data[2:22]
 				dtBytes, _ := wire.EncodeCOTPDT(szlResp)
 				_ = tr.Send(dtBytes)
 			}
@@ -226,7 +228,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 				const paramLen, dataLen = 2, 6
 				resp := make([]byte, 12+paramLen+dataLen)
 				resp[0] = 0x32
-				resp[1] = wire.ROSCTRAckData
+				resp[1] = byte(wire.ROSCTRAckData)
 				binary.BigEndian.PutUint16(resp[4:6], pduRef)
 				binary.BigEndian.PutUint16(resp[6:8], paramLen)
 				binary.BigEndian.PutUint16(resp[8:10], dataLen)
@@ -250,7 +252,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 				pduRef := binary.BigEndian.Uint16(s7[4:6])
 				resp := make([]byte, 20)
 				resp[0] = 0x32
-				resp[1] = wire.ROSCTRAckData
+				resp[1] = byte(wire.ROSCTRAckData)
 				binary.BigEndian.PutUint16(resp[4:6], pduRef)
 				binary.BigEndian.PutUint16(resp[6:8], 2)
 				binary.BigEndian.PutUint16(resp[8:10], 6)
@@ -273,7 +275,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			szlResp := make([]byte, 12+2+12)
 			szlResp[0] = 0x32
-			szlResp[1] = wire.ROSCTRAckData
+			szlResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(szlResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(szlResp[6:8], 2)
 			binary.BigEndian.PutUint16(szlResp[8:10], 12)
@@ -294,7 +296,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			szlResp := make([]byte, 12+2+12)
 			szlResp[0] = 0x32
-			szlResp[1] = wire.ROSCTRAckData
+			szlResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(szlResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(szlResp[6:8], 2)
 			binary.BigEndian.PutUint16(szlResp[8:10], 12)
@@ -314,7 +316,7 @@ func TestConnectWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			diagResp := make([]byte, 12+2+28) // 4 + 24 bytes SZL data (one 20-byte entry + padding)
 			diagResp[0] = 0x32
-			diagResp[1] = wire.ROSCTRAckData
+			diagResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(diagResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(diagResp[6:8], 2)
 			binary.BigEndian.PutUint16(diagResp[8:10], 28)
@@ -483,7 +485,7 @@ func TestReadAreaEmptyResponse(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -502,7 +504,7 @@ func TestReadAreaEmptyResponse(t *testing.T) {
 			// Param 2 bytes, data: retCode, 0x04, length=0 (0 bytes) -> 4 bytes total
 			emptyResp := make([]byte, 12+2+4)
 			emptyResp[0] = 0x32
-			emptyResp[1] = wire.ROSCTRAckData
+			emptyResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(emptyResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(emptyResp[6:8], 2)
 			binary.BigEndian.PutUint16(emptyResp[8:10], 4)
@@ -567,7 +569,7 @@ func TestReadAreaRejectedResponse(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -585,7 +587,7 @@ func TestReadAreaRejectedResponse(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			rejResp := make([]byte, 12+2+4)
 			rejResp[0] = 0x32
-			rejResp[1] = wire.ROSCTRAckData
+			rejResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(rejResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(rejResp[6:8], 2)
 			binary.BigEndian.PutUint16(rejResp[8:10], 4)
@@ -653,7 +655,7 @@ func TestReadAreaShortRead(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -671,7 +673,7 @@ func TestReadAreaShortRead(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			shortResp := make([]byte, 12+2+8) // 8 = 4 header + 4 (2 bytes = 16 bits)
 			shortResp[0] = 0x32
-			shortResp[1] = wire.ROSCTRAckData
+			shortResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(shortResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(shortResp[6:8], 2)
 			binary.BigEndian.PutUint16(shortResp[8:10], 8)
@@ -738,7 +740,7 @@ func TestReadAreaProtocolError(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -756,7 +758,7 @@ func TestReadAreaProtocolError(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			badResp := make([]byte, 12+2+4)
 			badResp[0] = 0x32
-			badResp[1] = wire.ROSCTRAckData
+			badResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(badResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(badResp[6:8], 2)
 			binary.BigEndian.PutUint16(badResp[8:10], 4)
@@ -816,7 +818,7 @@ func TestReadAreaZeroItems(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -834,7 +836,7 @@ func TestReadAreaZeroItems(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			zeroResp := make([]byte, 12+2+0)
 			zeroResp[0] = 0x32
-			zeroResp[1] = wire.ROSCTRAckData
+			zeroResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(zeroResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(zeroResp[6:8], 2)
 			binary.BigEndian.PutUint16(zeroResp[8:10], 0)

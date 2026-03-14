@@ -43,10 +43,19 @@ func TestInspectFrameWithS7(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectFrame error: %v", err)
 	}
-	if s.ROSCTR != ROSCTRJob {
+	if s.ROSCTR != byte(ROSCTRJob) {
 		t.Fatalf("unexpected ROSCTR: 0x%02X", s.ROSCTR)
 	}
 	if s.Function != FuncReadVar {
 		t.Fatalf("unexpected function: 0x%02X", s.Function)
 	}
+}
+
+func FuzzInspectFrame(f *testing.F) {
+	dtBytes, _ := EncodeCOTPDT(EncodeS7Header(ROSCTRJob, 1, 2, 0))
+	frame, _ := tpkt.Encode(dtBytes)
+	f.Add(frame)
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		_, _ = InspectFrame(frame)
+	})
 }

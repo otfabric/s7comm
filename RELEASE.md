@@ -1,3 +1,29 @@
+# Release v0.6.0
+
+**Date:** 2026-03-13
+**Previous release:** v0.5.1
+
+## Summary
+
+- **ReadResult API**: Field `Error` renamed to `Message` (human-readable only; not stable API). Added `Success()` (same as `OK()`). Documented `Status` as canonical outcome, `Err()` as convenience adapter, and `Cause` as optional/non-stable.
+- **Package docs**: Outcome models (Strict / Structured / Best-effort) and canonical read pattern (`err` then `res.Err()` then `res.Data`). Stable sentinels: `ErrNotConnected`, `ErrRequestExceedsPDU`, `PDURefMismatchError`, `ValidationError`, `ReadStatus`; `ErrProtocolFailure` documented as advanced/diagnostic.
+- **Connect reconnect**: Dial and handshake the new connection first; existing session is replaced only after the new handshake succeeds. Failed reconnect no longer drops a healthy session.
+- **ValidationError everywhere**: All caller-input validation now returns `*ValidationError`: `Connect` (port, timeout, max PDU, rack/slot), `UploadBlock`, `GetBlockInfo`, `Discover` (rack/slot, jitter, maxAttempts), `streamCIDR`/`expandCIDR` (CIDR validation). Use `errors.As(err, &ValidationError{})` to detect.
+- **Handshake protocol errors**: COTP/S7 decode and shape failures in `performCOTPConnect` and `performS7Setup` wrap `ErrProtocolFailure`; setup PDU ref mismatch returns `PDURefMismatchError`.
+- **Request validation**: `CompareReadRequest`: timeout ≥ 0, each candidate rack/slot validated; zero candidates allowed. `RackSlotProbeRequest`: non-empty address, port 0..65535, rack 0..7, slot 0..31 (and min ≤ max).
+- **GetBlockInfo**: Documented contract: transport/protocol failure → `(nil, err)`; parse failure after transport success → partial `BlockInfo` (Type, Number) plus `err`.
+- **Context cancellation**: README and transport docs note that cancellation is strongly effective only when the context has a deadline.
+- **Discover**: README recommends conservative CIDR ranges (e.g. `/24` or smaller) in OT environments.
+- **UploadBlock**: End-upload cleanup timeout reduced from 2s to 500ms. Documented: best-effort cleanup before return may add a short delay; cleanup errors not returned.
+- **WriteArea**: Documented that the number of bytes written is `len(data)`; `addr.Size` is ignored.
+- **UploadBlock tests**: Empty payload error, protocol failure on chunk (no retry), cleanup failure does not change result, context deadline returns promptly.
+- **Method docs**: Best-effort first sentence for `Identify`, `GetBlockInfo`, `ListAllBlocks`, `ReadDiagBuffer`; use-case sentence for `CompareRead`.
+
+## Breaking changes
+
+- **ReadResult**: Field `Error` renamed to `Message`. Callers that read or set `result.Error` must switch to `result.Message`.
+
+---
 # Release v0.5.1
 
 **Date:** 2026-03-13

@@ -2,8 +2,8 @@ package wire
 
 import "encoding/binary"
 
-// EncodeSetupCommRequest creates a Setup Communication request
-func EncodeSetupCommRequest(maxAmqCalling, maxAmqCalled, pduSize int) []byte {
+// EncodeSetupCommRequest creates a Setup Communication request with the given PDU reference.
+func EncodeSetupCommRequest(pduRef uint16, maxAmqCalling, maxAmqCalled, pduSize int) []byte {
 	param := make([]byte, 8)
 	param[0] = FuncSetupComm
 	param[1] = 0x00 // Reserved
@@ -11,7 +11,7 @@ func EncodeSetupCommRequest(maxAmqCalling, maxAmqCalled, pduSize int) []byte {
 	binary.BigEndian.PutUint16(param[4:6], uint16(maxAmqCalled))
 	binary.BigEndian.PutUint16(param[6:8], uint16(pduSize))
 
-	header := EncodeS7Header(ROSCTRJob, 0x0000, len(param), 0)
+	header := EncodeS7Header(ROSCTRJob, pduRef, len(param), 0)
 	return append(header, param...)
 }
 

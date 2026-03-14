@@ -56,8 +56,9 @@ type SZLResponse struct {
 	Data       []byte
 }
 
-// ParseSZLResponse parses a SZL read response
-func ParseSZLResponse(paramData, data []byte) (*SZLResponse, error) {
+// ParseSZLResponse parses a SZL read response from the S7 data payload.
+// Strict: validates return code, data length, and minimum 8-byte header.
+func ParseSZLResponse(data []byte) (*SZLResponse, error) {
 	if len(data) < 8 {
 		return nil, &S7Error{Message: "SZL response too short"}
 	}
@@ -67,9 +68,13 @@ func ParseSZLResponse(paramData, data []byte) (*SZLResponse, error) {
 		return nil, ReturnCodeError(retCode)
 	}
 
-	// Skip to SZL header
+	// SZL data length; payload is data[8:end] with end = 4+dataLen (header is 4 bytes before data[8])
 	dataLen := binary.BigEndian.Uint16(data[2:4])
-	if int(dataLen)+4 > len(data) {
+	end := 4 + int(dataLen)
+	if end < 8 {
+		return nil, &S7Error{Message: "SZL data length too short"}
+	}
+	if end > len(data) {
 		return nil, &S7Error{Message: "SZL data length mismatch"}
 	}
 
@@ -77,10 +82,7 @@ func ParseSZLResponse(paramData, data []byte) (*SZLResponse, error) {
 		SZLID:      binary.BigEndian.Uint16(data[4:6]),
 		SZLIndex:   binary.BigEndian.Uint16(data[6:8]),
 		DataLength: dataLen,
-	}
-
-	if len(data) > 8 {
-		resp.Data = data[8:]
+		Data:       data[8:end],
 	}
 
 	return resp, nil

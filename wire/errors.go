@@ -6,10 +6,14 @@ import (
 )
 
 var (
-	ErrShortS7Header       = errors.New("data too short for S7 header")
-	ErrInvalidS7ProtocolID = errors.New("invalid S7 protocol ID")
-	ErrShortS7AckHeader    = errors.New("data too short for S7 ack header")
-	ErrS7PayloadLength     = errors.New("S7 payload shorter than parameter/data lengths")
+	ErrShortS7Header        = errors.New("data too short for S7 header")
+	ErrInvalidS7ProtocolID  = errors.New("invalid S7 protocol ID")
+	ErrShortS7AckHeader     = errors.New("data too short for S7 ack header")
+	ErrS7PayloadLength      = errors.New("S7 payload shorter than parameter/data lengths")
+	ErrTruncatedItemHeader  = errors.New("read response item header truncated")
+	ErrTruncatedItemPayload = errors.New("read response item payload truncated or overrun")
+	ErrInvalidParamLength   = errors.New("invalid parameter section length")
+	ErrInvalidDataLength    = errors.New("invalid data section length")
 )
 
 // S7 Error classes
@@ -49,49 +53,72 @@ func (e *S7Error) Error() string {
 	return fmt.Sprintf("S7 error: class=0x%02X, code=0x%02X", e.Class, e.Code)
 }
 
-// NewS7Error creates a new S7 error with a descriptive message
+// NewS7Error creates a new S7 error preserving raw Class and Code, with a string mapping when known.
+// Header-level errors use Class and Code; item-level return codes use Code only (Class zero).
 func NewS7Error(class, code byte) *S7Error {
-	msg := ""
-	switch class {
-	case ErrClassAccess:
-		switch code {
-		case 0x00:
-			msg = "no access rights"
-		case 0x01:
-			msg = "invalid address"
-		case 0x04:
-			msg = "invalid data type"
-		default:
-			msg = "access error"
-		}
-	case ErrClassObject:
-		msg = "object does not exist"
-	case ErrClassResource:
-		msg = "resource busy"
-	}
+	msg := HeaderErrorString(class, code)
 	return &S7Error{Class: class, Code: code, Message: msg}
 }
 
-// ReturnCodeError returns an error for a return code
-func ReturnCodeError(code byte) error {
+// HeaderErrorString returns a human-readable string for S7 header error class/code.
+// Preserves raw values in S7Error; this is for display only.
+func HeaderErrorString(class, code byte) string {
+	switch class {
+	case ErrClassNoError:
+		if code == 0 {
+			return ""
+		}
+		return fmt.Sprintf("header error class=0x%02X code=0x%02X", class, code)
+	case ErrClassAccess:
+		switch code {
+		case 0x00:
+			return "no access rights"
+		case 0x01:
+			return "invalid address"
+		case 0x04:
+			return "invalid data type"
+		default:
+			return fmt.Sprintf("access error code=0x%02X", code)
+		}
+	case ErrClassObject:
+		return "object does not exist"
+	case ErrClassResource:
+		return "resource busy"
+	case ErrClassApp, ErrClassService, ErrClassSupplies:
+		return fmt.Sprintf("S7 error class=0x%02X code=0x%02X", class, code)
+	default:
+		return fmt.Sprintf("S7 error class=0x%02X code=0x%02X", class, code)
+	}
+}
+
+// ItemReturnCodeString returns a human-readable string for Read/Write item return code.
+func ItemReturnCodeString(code byte) string {
 	switch code {
 	case RetCodeSuccess:
-		return nil
+		return "success"
 	case RetCodeHWFault:
-		return &S7Error{Code: code, Message: "hardware fault"}
+		return "hardware fault"
 	case RetCodeAccessFault:
-		return &S7Error{Code: code, Message: "access denied"}
+		return "access denied"
 	case RetCodeAddressFault:
-		return &S7Error{Code: code, Message: "invalid address"}
+		return "invalid address"
 	case RetCodeDataTypeFault:
-		return &S7Error{Code: code, Message: "data type not supported"}
+		return "data type not supported"
 	case RetCodeDataSizeFault:
-		return &S7Error{Code: code, Message: "data size mismatch"}
+		return "data size mismatch"
 	case RetCodeBusy:
-		return &S7Error{Code: code, Message: "object busy"}
+		return "object busy"
 	case RetCodeNotAvailable:
-		return &S7Error{Code: code, Message: "object not available"}
+		return "object not available"
 	default:
-		return &S7Error{Code: code, Message: fmt.Sprintf("return code 0x%02X", code)}
+		return fmt.Sprintf("return code 0x%02X", code)
 	}
+}
+
+// ReturnCodeError returns an error for an item return code. Preserves raw Code in S7Error (Class zero).
+func ReturnCodeError(code byte) error {
+	if code == RetCodeSuccess {
+		return nil
+	}
+	return &S7Error{Code: code, Message: ItemReturnCodeString(code)}
 }

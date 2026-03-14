@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,65 @@ import (
 	"github.com/otfabric/s7comm/transport"
 	"github.com/otfabric/s7comm/wire"
 )
+
+func TestCompareRead_InvalidRequest(t *testing.T) {
+	_, err := CompareRead(context.Background(), CompareReadRequest{
+		Address:    "   ",
+		Candidates: []RackSlot{{0, 1}},
+		Area:       model.AreaDB,
+		DBNumber:   1,
+		Offset:     0,
+		Size:       8,
+	})
+	if err == nil {
+		t.Fatal("expected error for empty/whitespace address")
+	}
+	_, err = CompareRead(context.Background(), CompareReadRequest{
+		Address:    "127.0.0.1",
+		Port:       -1,
+		Candidates: []RackSlot{{0, 1}},
+		Area:       model.AreaDB,
+		DBNumber:   1,
+		Offset:     0,
+		Size:       8,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative port")
+	}
+	_, err = CompareRead(context.Background(), CompareReadRequest{
+		Address:    "127.0.0.1",
+		Candidates: []RackSlot{{0, 1}},
+		Area:       model.AreaDB,
+		DBNumber:   -1,
+		Offset:     0,
+		Size:       8,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative DBNumber")
+	}
+	_, err = CompareRead(context.Background(), CompareReadRequest{
+		Address:    "127.0.0.1",
+		Candidates: []RackSlot{{0, 1}},
+		Area:       model.AreaDB,
+		DBNumber:   1,
+		Offset:     -1,
+		Size:       8,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative Offset")
+	}
+	_, err = CompareRead(context.Background(), CompareReadRequest{
+		Address:    "127.0.0.1",
+		Candidates: []RackSlot{{0, 1}},
+		Area:       model.AreaDB,
+		DBNumber:   1,
+		Offset:     0,
+		Size:       -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative Size")
+	}
+}
 
 func TestCompareRead_EmptyCandidates(t *testing.T) {
 	result, err := CompareRead(context.Background(), CompareReadRequest{
@@ -37,9 +97,10 @@ func TestCompareRead_EmptyCandidates(t *testing.T) {
 }
 
 func TestCompareRead_SingleCandidate(t *testing.T) {
+	// Use a port unlikely to have a listener so connection fails
 	result, err := CompareRead(context.Background(), CompareReadRequest{
 		Address:    "127.0.0.1",
-		Port:       1,
+		Port:       35555,
 		Candidates: []RackSlot{{Rack: 0, Slot: 1}},
 		Area:       model.AreaDB,
 		DBNumber:   1,
@@ -53,7 +114,7 @@ func TestCompareRead_SingleCandidate(t *testing.T) {
 	if len(result.ByCandidate) != 1 {
 		t.Fatalf("expected 1 candidate result, got %d", len(result.ByCandidate))
 	}
-	// Connection will fail (port 1 closed), so we get TransportErr
+	// Connection fails (no listener), so we get TransportErr
 	if result.ByCandidate[0].Result.Status != ReadStatusTransportErr {
 		t.Errorf("expected transport error for unreachable, got %q", result.ByCandidate[0].Result.Status)
 	}
@@ -95,7 +156,7 @@ func TestCompareRead_TwoCandidatesWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			resp := make([]byte, 20)
 			resp[0] = 0x32
-			resp[1] = wire.ROSCTRAckData
+			resp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(resp[4:6], pduRef)
 			binary.BigEndian.PutUint16(resp[6:8], 8)
 			resp[12] = wire.FuncSetupComm
@@ -112,7 +173,7 @@ func TestCompareRead_TwoCandidatesWithFakeServer(t *testing.T) {
 			pduRef := binary.BigEndian.Uint16(s7[4:6])
 			readResp := make([]byte, 20)
 			readResp[0] = 0x32
-			readResp[1] = wire.ROSCTRAckData
+			readResp[1] = byte(wire.ROSCTRAckData)
 			binary.BigEndian.PutUint16(readResp[4:6], pduRef)
 			binary.BigEndian.PutUint16(readResp[6:8], 2)
 			binary.BigEndian.PutUint16(readResp[8:10], 6)
@@ -176,7 +237,7 @@ func TestCompareRead_DifferentData(t *testing.T) {
 
 	firstData := []byte{0xAB, 0xCD}
 	secondData := []byte{0x11, 0x22}
-	connIndex := 0
+	var connIndex int32
 
 	go func() {
 		for i := 0; i < 2; i++ {
@@ -184,11 +245,11 @@ func TestCompareRead_DifferentData(t *testing.T) {
 			if err != nil {
 				return
 			}
+			idx := atomic.AddInt32(&connIndex, 1) - 1
 			data := firstData
-			if connIndex == 1 {
+			if idx == 1 {
 				data = secondData
 			}
-			connIndex++
 			func(conn net.Conn, data []byte) {
 				defer func() { _ = conn.Close() }()
 				tr := transport.New(conn, 2*time.Second)
@@ -207,7 +268,7 @@ func TestCompareRead_DifferentData(t *testing.T) {
 					pduRef := binary.BigEndian.Uint16(s7[4:6])
 					resp := make([]byte, 20)
 					resp[0] = 0x32
-					resp[1] = wire.ROSCTRAckData
+					resp[1] = byte(wire.ROSCTRAckData)
 					binary.BigEndian.PutUint16(resp[4:6], pduRef)
 					binary.BigEndian.PutUint16(resp[6:8], 8)
 					resp[12] = wire.FuncSetupComm
@@ -224,7 +285,7 @@ func TestCompareRead_DifferentData(t *testing.T) {
 					pduRef := binary.BigEndian.Uint16(s7[4:6])
 					readResp := make([]byte, 20)
 					readResp[0] = 0x32
-					readResp[1] = wire.ROSCTRAckData
+					readResp[1] = byte(wire.ROSCTRAckData)
 					binary.BigEndian.PutUint16(readResp[4:6], pduRef)
 					binary.BigEndian.PutUint16(readResp[6:8], 2)
 					binary.BigEndian.PutUint16(readResp[8:10], 6)
@@ -264,5 +325,28 @@ func TestCompareRead_DifferentData(t *testing.T) {
 	}
 	if result.RackSlotInsensitive {
 		t.Error("expected RackSlotInsensitive false when data differs")
+	}
+}
+
+func BenchmarkCompareReadManyCandidates(b *testing.B) {
+	ctx := context.Background()
+	candidates := make([]RackSlot, 20)
+	for i := range candidates {
+		candidates[i] = RackSlot{Rack: 0, Slot: i % 4}
+	}
+	req := CompareReadRequest{
+		Address:     "127.0.0.1",
+		Port:        7,
+		Candidates:  candidates,
+		Area:        model.AreaDB,
+		DBNumber:    1,
+		Offset:      0,
+		Size:        8,
+		Timeout:     5 * time.Millisecond,
+		Parallelism: 4,
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = CompareRead(ctx, req)
 	}
 }

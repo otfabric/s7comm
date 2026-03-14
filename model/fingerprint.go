@@ -23,18 +23,6 @@ type Fingerprint struct {
 	SupportsPI     bool
 }
 
-// DiscoverResult represents a discovery scan result
-type DiscoverResult struct {
-	IP      string
-	Port    int
-	IsS7    bool
-	Rack    int
-	Slot    int
-	PDUSize int
-	CPUType string
-	Error   string
-}
-
 // TSAPProfile represents a TSAP probing result
 type TSAPProfile struct {
 	LocalTSAP  uint16
