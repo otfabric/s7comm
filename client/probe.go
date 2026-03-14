@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/otfabric/go-cotp"
 	"github.com/otfabric/s7comm/transport"
 	"github.com/otfabric/s7comm/wire"
 )
@@ -259,23 +260,25 @@ func applyProbeDefaults(req *RackSlotProbeRequest) {
 func runFollowUp(ctx context.Context, conn *transport.Conn, pduRef uint16, strategy ConfirmationKind) (ok bool, confirmedBy ConfirmationKind, errMsg string) {
 	trySZL := func(szlID uint16) (bool, string) {
 		req := wire.EncodeSZLRequest(pduRef, szlID, 0)
-		cotp := wire.EncodeCOTPData()
-		frame := wire.EncodeTPKT(append(cotp, req...))
-		if err := conn.SendContext(ctx, frame); err != nil {
+		dtBytes, err := wire.EncodeCOTPDT(req)
+		if err != nil {
+			return false, err.Error()
+		}
+		if err := conn.SendContext(ctx, dtBytes); err != nil {
 			return false, err.Error()
 		}
 		resp, err := conn.ReceiveContext(ctx)
 		if err != nil {
 			return false, err.Error()
 		}
-		_, cotpData, err := wire.ParseTPKT(resp)
+		dec, err := cotp.Decode(resp)
 		if err != nil {
 			return false, err.Error()
 		}
-		_, s7Data, err := wire.ParseCOTP(cotpData)
-		if err != nil {
-			return false, err.Error()
+		if dec.DT == nil {
+			return false, "expected COTP DT"
 		}
+		s7Data := dec.DT.UserData
 		hdr, rest, err := wire.ParseS7Header(s7Data)
 		if err != nil {
 			return false, err.Error()
@@ -354,9 +357,14 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 	c.RemoteTSAP = remoteTSAP
 
 	// COTP connect
-	cr := wire.EncodeCOTPCR(localTSAP, remoteTSAP)
-	frame := wire.EncodeTPKT(cr)
-	if err := conn.SendContext(ctx, frame); err != nil {
+	crBytes, err := wire.EncodeCOTPCR(localTSAP, remoteTSAP)
+	if err != nil {
+		c.Stage = ProbeStageTCP
+		c.Status = StatusTCPOnly
+		c.Error = fmt.Sprintf("COTP encode: %s", err)
+		return c
+	}
+	if err := conn.SendContext(ctx, crBytes); err != nil {
 		c.Stage = ProbeStageTCP
 		c.Status = StatusTCPOnly
 		c.Error = fmt.Sprintf("COTP send: %s", err)
@@ -369,32 +377,30 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Error = fmt.Sprintf("COTP recv: %s", err)
 		return c
 	}
-	_, cotpData, err := wire.ParseTPKT(resp)
-	if err != nil {
-		c.Stage = ProbeStageTCP
-		c.Status = StatusTCPOnly
-		c.Error = fmt.Sprintf("TPKT parse: %s", err)
-		return c
-	}
-	cotp, _, err := wire.ParseCOTP(cotpData)
+	dec, err := cotp.Decode(resp)
 	if err != nil {
 		c.Stage = ProbeStageTCP
 		c.Status = StatusTCPOnly
 		c.Error = fmt.Sprintf("COTP parse: %s", err)
 		return c
 	}
-	if cotp.PDUType != wire.COTPTypeCC {
+	if dec.Type != cotp.TypeCC {
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("expected COTP CC, got 0x%02X", cotp.PDUType)
+		c.Error = fmt.Sprintf("expected COTP CC, got %s", dec.Type)
 		return c
 	}
 
 	// S7 setup
 	setupReq := wire.EncodeSetupCommRequest(1, 1, 480)
-	cotpDT := wire.EncodeCOTPData()
-	frame = wire.EncodeTPKT(append(cotpDT, setupReq...))
-	if err := conn.SendContext(ctx, frame); err != nil {
+	setupDT, err := wire.EncodeCOTPDT(setupReq)
+	if err != nil {
+		c.Stage = ProbeStageCOTP
+		c.Status = StatusCOTPOnly
+		c.Error = fmt.Sprintf("S7 setup encode: %s", err)
+		return c
+	}
+	if err := conn.SendContext(ctx, setupDT); err != nil {
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 setup send: %s", err)
@@ -407,20 +413,20 @@ func probeOne(ctx context.Context, req RackSlotProbeRequest, rack, slot int) Rac
 		c.Error = fmt.Sprintf("S7 setup recv: %s", err)
 		return c
 	}
-	_, cotpData, err = wire.ParseTPKT(resp)
-	if err != nil {
-		c.Stage = ProbeStageCOTP
-		c.Status = StatusCOTPOnly
-		c.Error = fmt.Sprintf("S7 setup TPKT parse: %s", err)
-		return c
-	}
-	_, s7Data, err := wire.ParseCOTP(cotpData)
+	dec, err = cotp.Decode(resp)
 	if err != nil {
 		c.Stage = ProbeStageCOTP
 		c.Status = StatusCOTPOnly
 		c.Error = fmt.Sprintf("S7 setup COTP parse: %s", err)
 		return c
 	}
+	if dec.DT == nil {
+		c.Stage = ProbeStageCOTP
+		c.Status = StatusCOTPOnly
+		c.Error = fmt.Sprintf("expected COTP DT, got %s", dec.Type)
+		return c
+	}
+	s7Data := dec.DT.UserData
 	header, paramData, err := wire.ParseS7Header(s7Data)
 	if err != nil {
 		c.Stage = ProbeStageSetup

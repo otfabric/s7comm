@@ -1,3 +1,21 @@
+# Release v0.5.0
+
+**Date:** 2026-03-13
+**Previous release:** v0.4.0
+
+## Summary
+
+- **Adopt go-tpkt and go-cotp**: TPKT framing and COTP encode/decode now use the shared libraries [github.com/otfabric/go-tpkt](https://github.com/otfabric/go-tpkt) and [github.com/otfabric/go-cotp](https://github.com/otfabric/go-cotp). Transport layer uses `tpkt.Reader`/`tpkt.Writer`; Send/Receive operate on TPDU payload (e.g. COTP bytes) with TPKT applied internally. Wire package exposes `EncodeCOTPCR` and `EncodeCOTPDT` (using go-cotp); decoding uses `cotp.Decode` from go-cotp. `InspectFrame` uses `tpkt.Parse` and `cotp.Decode`.
+- **go-cotp v0.1.2**: Dependency updated to [go-cotp v0.1.2](https://github.com/otfabric/go-cotp/releases/tag/v0.1.2) (detection parity, error semantics, doc fixes).
+- **API.md improvements**: Transport invariant documented (Receive returns one complete COTP TPDU; no raw S7). Wire section clarifies that `EncodeCOTPCR`/`EncodeCOTPDT` return COTP payload only and must be sent via transport.Send without double TPKT framing. Added CLI contract note: when exit code is driven by top-level error vs ReadResult.Status, default treatment of short/empty-read as failure, and recommended behavior for `--strict-read` / `--allow-short`.
+- **CI and tooling**: Single workflow [test.yml](.github/workflows/test.yml) replaces ci.yml and release.yml. Test job runs on ubuntu and Windows with Go 1.25.x (vet, test, mod verify); coverage job uploads to Codecov and artifacts; lint job runs staticcheck and golangci-lint. Releases are done manually. README badges aligned (Go, License, Go Report Card, CI, Codecov, Release). `.golangci.yml` updated to config version `"2"` for golangci-lint v2 compatibility.
+
+## Breaking changes
+
+- **wire**: Removed `EncodeTPKT`, `ParseTPKT`, `EncodeCOTPData`, `ParseCOTP`, and the old `COTP`/`TPKT` types. Use `wire.EncodeCOTPCR` / `wire.EncodeCOTPDT` (return `([]byte, error)`), and `cotp.Decode` for parsing. Use `tpkt.Encode`/`tpkt.Parse`/`tpkt.Decode` from go-tpkt when building or parsing TPKT frames.
+- **transport**: `Send` now expects TPDU payload (e.g. COTP bytes); it writes one TPKT frame. `Receive` returns the TPKT payload only (no longer the full TPKT frame bytes). Callers that previously built full TPKT frames and passed them to `Send` must now pass only the inner payload.
+
+---
 # Release v0.4.0
 
 **Date:** 2026-03-13

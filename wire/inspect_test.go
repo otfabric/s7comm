@@ -1,14 +1,26 @@
 package wire
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/otfabric/go-cotp"
+	"github.com/otfabric/go-tpkt"
+)
 
 func TestInspectFrameTPKTOnly(t *testing.T) {
-	frame := EncodeTPKT(EncodeCOTPData())
+	dtBytes, err := EncodeCOTPDT(nil)
+	if err != nil {
+		t.Fatalf("EncodeCOTPDT: %v", err)
+	}
+	frame, err := tpkt.Encode(dtBytes)
+	if err != nil {
+		t.Fatalf("tpkt.Encode: %v", err)
+	}
 	s, err := InspectFrame(frame)
 	if err != nil {
 		t.Fatalf("InspectFrame error: %v", err)
 	}
-	if s.COTPType != COTPTypeDT {
+	if s.COTPType != byte(cotp.TypeDT) {
 		t.Fatalf("unexpected COTP type: 0x%02X", s.COTPType)
 	}
 	if s.ROSCTR != 0 {
@@ -19,8 +31,14 @@ func TestInspectFrameTPKTOnly(t *testing.T) {
 func TestInspectFrameWithS7(t *testing.T) {
 	s7 := EncodeS7Header(ROSCTRJob, 1, 1, 0)
 	s7 = append(s7, FuncReadVar)
-	frame := EncodeTPKT(append(EncodeCOTPData(), s7...))
-
+	dtBytes, err := EncodeCOTPDT(s7)
+	if err != nil {
+		t.Fatalf("EncodeCOTPDT: %v", err)
+	}
+	frame, err := tpkt.Encode(dtBytes)
+	if err != nil {
+		t.Fatalf("tpkt.Encode: %v", err)
+	}
 	s, err := InspectFrame(frame)
 	if err != nil {
 		t.Fatalf("InspectFrame error: %v", err)

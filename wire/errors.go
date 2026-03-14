@@ -6,12 +6,6 @@ import (
 )
 
 var (
-	ErrShortTPKTHeader     = errors.New("data too short for TPKT header")
-	ErrInvalidTPKTVersion  = errors.New("invalid TPKT version")
-	ErrTPKTLengthExceeds   = errors.New("TPKT length exceeds data")
-	ErrShortCOTPHeader     = errors.New("data too short for COTP header")
-	ErrCOTPLengthExceeds   = errors.New("COTP length exceeds data")
-	ErrShortCOTPCRCC       = errors.New("COTP CR/CC too short")
 	ErrShortS7Header       = errors.New("data too short for S7 header")
 	ErrInvalidS7ProtocolID = errors.New("invalid S7 protocol ID")
 	ErrShortS7AckHeader    = errors.New("data too short for S7 ack header")

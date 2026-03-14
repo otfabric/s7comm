@@ -1,5 +1,6 @@
-name: CI
-run-name: "CI (${{ github.event_name }}) on ${{ github.ref_name }} by @${{ github.actor }}"
+name: Test
+
+run-name: "Test (${{ github.event_name }}) on ${{ github.ref_name }} by @${{ github.actor }}"
 
 on:
   push:
@@ -9,12 +10,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   test:
     name: Test ${{ matrix.os }} go${{ matrix.go }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         go: ["1.25.x"]
@@ -29,17 +32,20 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: true
 
+      - name: Verify module
+        run: go mod tidy && git diff --exit-code
+
       - name: Download dependencies
         run: go mod download
 
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Run vet
-        run: make vet
+      - name: Vet
+        run: go vet ./...
 
-      - name: Run tests
-        run: make test
+      - name: Test
+        run: go test -count=1 -race ./...
 
   coverage:
     name: Coverage
@@ -62,16 +68,35 @@ jobs:
         run: |
           make coverage
           go tool cover -html=coverage.out -o coverage.html
-          go tool cover -func=coverage.out | tail -1
+          go tool cover -func=coverage.out | tee coverage.txt
 
-      - name: Upload coverage report
+      - name: Add coverage summary
+        run: |
+          echo "## Coverage Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat coverage.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifacts
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: |
             coverage.out
+            coverage.txt
             coverage.html
           retention-days: 14
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: coverage.out
+          flags: unittests
+          name: s7comm
+          fail_ci_if_error: true
+          verbose: true
 
   lint:
     name: Lint

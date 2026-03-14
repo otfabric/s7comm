@@ -1,15 +1,25 @@
 package wire
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/otfabric/go-cotp"
+)
 
 func TestEncodeParseCOTPCR(t *testing.T) {
-	pdu := EncodeCOTPCR(0x0100, 0x0301)
-	c, _, err := ParseCOTP(pdu)
+	pdu, err := EncodeCOTPCR(0x0100, 0x0301)
 	if err != nil {
-		t.Fatalf("ParseCOTP error: %v", err)
+		t.Fatalf("EncodeCOTPCR: %v", err)
 	}
-	if c.PDUType != COTPTypeCR {
-		t.Fatalf("unexpected pdu type: 0x%02X", c.PDUType)
+	dec, err := cotp.Decode(pdu)
+	if err != nil {
+		t.Fatalf("cotp.Decode: %v", err)
+	}
+	if dec.Type != cotp.TypeCR {
+		t.Fatalf("unexpected pdu type: %s", dec.Type)
+	}
+	if dec.CR == nil {
+		t.Fatal("expected CR non-nil")
 	}
 }
 

@@ -1,6 +1,11 @@
 package wire
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/otfabric/go-cotp"
+	"github.com/otfabric/go-tpkt"
+)
 
 // FrameSummary captures key protocol fields from one S7-over-TPKT frame.
 type FrameSummary struct {
@@ -14,23 +19,27 @@ type FrameSummary struct {
 	ErrorCode   byte
 }
 
-// InspectFrame decodes a full TPKT frame and extracts high-level protocol metadata.
+// InspectFrame decodes a full TPKT frame (go-tpkt) and COTP (go-cotp) and extracts high-level protocol metadata.
 func InspectFrame(frame []byte) (*FrameSummary, error) {
-	tpkt, cotpPayload, err := ParseTPKT(frame)
+	f, err := tpkt.Parse(frame)
 	if err != nil {
 		return nil, fmt.Errorf("parse tpkt: %w", err)
 	}
 
-	cotp, s7Payload, err := ParseCOTP(cotpPayload)
+	dec, err := cotp.Decode(f.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("parse cotp: %w", err)
 	}
 
 	s := &FrameSummary{
-		TPKTLength: int(tpkt.Length),
-		COTPType:   cotp.PDUType,
+		TPKTLength: f.Len(),
+		COTPType:   byte(dec.Type),
 	}
 
+	var s7Payload []byte
+	if dec.DT != nil {
+		s7Payload = dec.DT.UserData
+	}
 	if len(s7Payload) == 0 || s7Payload[0] != 0x32 {
 		return s, nil
 	}

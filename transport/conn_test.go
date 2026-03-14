@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/otfabric/s7comm/wire"
+	"github.com/otfabric/go-tpkt"
 )
 
 func TestSendReceiveWithNetPipe(t *testing.T) {
@@ -15,17 +15,19 @@ func TestSendReceiveWithNetPipe(t *testing.T) {
 
 	conn := New(c1, 2*time.Second)
 
+	// Other end sends one TPKT frame (COTP DT minimal payload)
 	go func() {
-		frame := wire.EncodeTPKT([]byte{0x02, 0xF0, 0x80})
+		payload := []byte{0x02, 0xF0, 0x80}
+		frame, _ := tpkt.Encode(payload)
 		_, _ = c2.Write(frame)
 	}()
 
-	frame, err := conn.Receive()
+	payload, err := conn.Receive()
 	if err != nil {
 		t.Fatalf("Receive error: %v", err)
 	}
-	if len(frame) < 4 {
-		t.Fatalf("short frame: %d", len(frame))
+	// Receive returns TPKT payload only (COTP bytes)
+	if len(payload) != 3 {
+		t.Fatalf("expected payload len 3, got %d", len(payload))
 	}
-
 }

@@ -1,15 +1,18 @@
 # otfabric/s7comm - Siemens S7 Protocol Library for Go
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![CI](https://github.com/otfabric/s7comm/actions/workflows/ci.yml/badge.svg)](https://github.com/otfabric/s7comm/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/otfabric/s7comm?style=flat&color=blue)](https://github.com/otfabric/s7comm/releases)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/otfabric/s7comm)](https://goreportcard.com/report/github.com/otfabric/s7comm)
+[![CI](https://github.com/otfabric/s7comm/actions/workflows/test.yml/badge.svg)](https://github.com/otfabric/s7comm/actions/workflows/test.yml)
+[![Codecov](https://codecov.io/gh/otfabric/s7comm/graph/badge.svg)](https://app.codecov.io/gh/otfabric/s7comm)
+[![Release](https://img.shields.io/github/v/release/otfabric/s7comm?label=release)](https://github.com/otfabric/s7comm/releases)
 
-A pure Go implementation of the Siemens S7 communication protocol.
+A pure Go implementation of the Siemens S7 communication protocol. It builds on [go-tpkt](https://github.com/otfabric/go-tpkt) for RFC 1006 TPKT framing and [go-cotp](https://github.com/otfabric/go-cotp) for COTP (X.224) encode/decode.
 
 The library provides:
 
 - S7 client connection setup (TPKT + COTP + S7 setup communication)
-- Read/write operations for DB, inputs, outputs, and merkers (with rich `ReadResult` and explicit status)
+- Read/write operations for DB, inputs, outputs, and merkers (rich `ReadResult` with explicit status; CLI contract in [API.md](API.md))
 - Readable range scan and compare-read across rack/slot candidates
 - Device discovery over CIDR ranges with rack/slot probing
 - SZL-based identification and diagnostics helpers
@@ -21,7 +24,7 @@ For complete API details, see [API.md](API.md).
 ## Install
 
 ```sh
-go get otfabric/s7comm
+go get github.com/otfabric/s7comm
 ```
 
 Requires Go 1.25 or later.
@@ -131,6 +134,11 @@ Use `StopOnFirst: true` to stop after the first valid combination; in strict mod
 Scan an area to discover which byte ranges are readable (client must be connected):
 
 ```go
+import (
+	"github.com/otfabric/s7comm/client"
+	"github.com/otfabric/s7comm/model"
+)
+
 result, err := c.ProbeReadableRanges(ctx, client.RangeProbeRequest{
 	Area:      model.AreaInputs,
 	Start:     0,
@@ -150,6 +158,11 @@ result, err := c.ProbeReadableRanges(ctx, client.RangeProbeRequest{
 Run the same read across multiple rack/slot candidates to detect whether the endpoint responds identically (rack/slot-insensitive):
 
 ```go
+import (
+	"github.com/otfabric/s7comm/client"
+	"github.com/otfabric/s7comm/model"
+)
+
 result, err := client.CompareRead(ctx, client.CompareReadRequest{
 	Address:    "192.168.0.10",
 	Port:       102,
@@ -172,12 +185,12 @@ s7commctl probe rackslot --ip 192.168.0.10 --confirm szl
 s7commctl probe rackslot --ip 192.168.0.10 --strict --first-confirmed
 ```
 
-## Package Structure
+## Package structure
 
-- `client` - High-level client API (connect, read/write, SZL, discovery, blocks)
-- `model` - Data models, areas, type decoders/encoders, device fingerprint structures
-- `transport` - Transport connection wrapper with timeout/context handling
-- `wire` - Low-level protocol encode/decode for TPKT, COTP, and S7 PDUs
+- **client** — High-level client API (connect, read/write, range scan, compare read, discovery, rack/slot probe, SZL, blocks)
+- **model** — Data models, areas, type decoders/encoders, device fingerprint structures
+- **transport** — TCP connection wrapper with TPKT framing ([go-tpkt](https://github.com/otfabric/go-tpkt)); Send/Receive work on TPDU payloads
+- **wire** — S7 PDU encode/decode and COTP helpers ([go-cotp](https://github.com/otfabric/go-cotp)); TPKT is handled by transport
 
 ## Development
 

@@ -4,10 +4,10 @@ This document describes the public API exposed by the module and gives practical
 
 ## Packages
 
-- client: high-level PLC operations
-- model: domain data types and value helpers
-- transport: TCP I/O wrapper with context-aware deadlines
-- wire: low-level protocol encoding and parsing
+- **client** — High-level PLC operations (connect, read/write, range scan, compare read, discovery, rack/slot probe, SZL, blocks)
+- **model** — Domain data types, areas, value encoders/decoders, device and fingerprint structures
+- **transport** — TCP connection wrapper with TPKT framing (go-tpkt); Send/Receive on TPDU payloads
+- **wire** — S7 PDU encoding/parsing and COTP helpers (go-cotp)
 
 ## client
 
@@ -63,6 +63,14 @@ type ReadResult struct {
 func (r *ReadResult) OK() bool   // true if Status == ReadStatusSuccess
 func (r *ReadResult) Err() error // non-nil when Status is not success
 ```
+
+**CLI contract (for s7commctl and other consumers):** To avoid ambiguity, CLIs should define:
+
+- **Top-level `error`**: Use for connection/setup failure (e.g. `Connect` failed, transport error). If non-nil, exit with a failure code; do not treat as success.
+- **`ReadResult.Status`**: Use for read outcome. If `err == nil` but `!result.OK()`, the read failed or was short/empty/rejected—exit failure unless the CLI explicitly allows it (e.g. `--allow-short`).
+- **Default behavior**: Treat `success` as success; treat `short-read`, `empty-read`, `rejected`, and other non-success statuses as failures (non-zero exit) and surface status in output.
+- **`--strict-read`**: If implemented, fail the command (non-zero exit) when status is not `success` or when `ReturnedLength != RequestedLength`; may also add a clear message in output. This should not change the *format* of output, only success/failure and optional wording.
+- **`--allow-short`**: If implemented, allow short-read (and optionally empty-read) to be reported as success for exploratory use, while still showing the actual status and lengths in output.
 
 ### Read/write API
 
@@ -293,7 +301,7 @@ type RackSlotProbeResult struct {
     Valid            []RackSlotCandidate
     SetupAccepted    int // candidates that reached setup success
     ConfirmedByQuery int // candidates with valid-query
-    Flaky            int // reserved
+    Flaky            int // candidates with status flaky (mixed retry results)
     TCPOnly          int
 }
 
@@ -312,8 +320,8 @@ Status values:
 | `tcp-only`       | TCP ok, COTP failed                                    |
 | `unreachable`    | TCP connect failed                                     |
 | `rejected`       | Target rejected (S7 error)                             |
-| `timeout`        | Any stage timed out (reserved)                          |
-| `flaky`          | Retries produced mixed results (reserved)              |
+| `timeout`        | Any stage timed out                                     |
+| `flaky`          | Retries produced mixed results                          |
 
 Confirmation strategies (when `Strict` is true):
 
@@ -459,6 +467,10 @@ Notes:
 
 ## transport
 
+Transport uses **github.com/otfabric/go-tpkt** for TPKT framing: `Send` writes the given TPDU payload as one TPKT frame; `Receive` reads the next TPKT frame and returns its payload.
+
+**Invariant:** `Receive()` returns exactly one TPKT payload. In the S7 connection and data flow this payload is always one complete COTP TPDU (e.g. CC, DT). Callers never receive raw S7 bytes directly; S7 payload is carried inside COTP DT `UserData` and must be extracted via `cotp.Decode` and `dec.DT.UserData`.
+
 ```go
 import "github.com/otfabric/s7comm/transport"
 ```
@@ -474,9 +486,9 @@ type Tracer interface {
 
 func New(conn net.Conn, timeout time.Duration) *Conn
 func (c *Conn) SetTracer(t Tracer)
-func (c *Conn) Send(data []byte) error
+func (c *Conn) Send(data []byte) error       // payload = TPDU (e.g. COTP); TPKT framing applied internally
 func (c *Conn) SendContext(ctx context.Context, data []byte) error
-func (c *Conn) Receive() ([]byte, error)
+func (c *Conn) Receive() ([]byte, error)    // returns TPKT payload (e.g. COTP bytes)
 func (c *Conn) ReceiveContext(ctx context.Context) ([]byte, error)
 func (c *Conn) Close() error
 func (c *Conn) LocalAddr() net.Addr
@@ -489,17 +501,28 @@ func (c *Conn) RemoteAddr() net.Addr
 import "github.com/otfabric/s7comm/wire"
 ```
 
-### Framing and S7 headers
+### TPKT and COTP
+
+TPKT framing is provided by **github.com/otfabric/go-tpkt**: the transport layer sends and receives TPDU payloads as TPKT frames. COTP encoding uses **github.com/otfabric/go-cotp** (import path `github.com/otfabric/go-cotp`); the wire package exposes S7-oriented helpers:
 
 ```go
-func EncodeTPKT(payload []byte) []byte
-func ParseTPKT(data []byte) (*TPKT, []byte, error)
-
-func EncodeCOTPCR(localTSAP, remoteTSAP uint16) []byte
-func EncodeCOTPData() []byte
-func ParseCOTP(data []byte) (*COTP, []byte, error)
 func BuildTSAP(connType, rack, slot int) uint16
+func EncodeCOTPCR(localTSAP, remoteTSAP uint16) ([]byte, error)
+func EncodeCOTPDT(s7Payload []byte) ([]byte, error)
+```
 
+**Ownership and usage:**
+
+- These functions return **COTP payload only** (one complete COTP TPDU). The caller must send that payload with `transport.Send(...)`; the transport layer adds TPKT framing. **Do not** wrap the returned bytes in TPKT again when using this transport—doing so would double-frame and break the protocol.
+- `BuildTSAP`: S7 TSAP from connection type (1=PG, 2=OP, 3=S7Basic), rack, slot.
+- `EncodeCOTPCR`: COTP Connection Request for the given TSAPs. Send the returned bytes via `transport.Send`.
+- `EncodeCOTPDT`: COTP Data TPDU with EOT and the given S7 payload. Send the returned bytes via `transport.Send`.
+
+Decoding of received payloads is done via `cotp.Decode(payload)` from go-cotp (e.g. check `dec.Type`, `dec.CC`, `dec.DT.UserData`).
+
+### S7 headers
+
+```go
 func EncodeS7Header(rosctr byte, pduRef uint16, paramLen, dataLen int) []byte
 func ParseS7Header(data []byte) (*S7Header, []byte, error)
 ```
@@ -537,4 +560,4 @@ func NewS7Error(class, code byte) *S7Error
 func ReturnCodeError(code byte) error
 ```
 
-Key sentinel errors include short/invalid TPKT, COTP, and S7 headers and payload length mismatches.
+Key sentinel errors include short/invalid S7 headers and payload length mismatches. TPKT and COTP errors come from go-tpkt and go-cotp when used for framing and decode.

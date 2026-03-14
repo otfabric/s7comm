@@ -5,40 +5,43 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/otfabric/go-cotp"
+	"github.com/otfabric/go-tpkt"
 )
 
 func TestFixtureTPKTDTFrame(t *testing.T) {
 	raw := loadHexFixture(t, "../testdata/frames/tpkt_dt.hex")
-	tpkt, payload, err := ParseTPKT(raw)
+	f, err := tpkt.Parse(raw)
 	if err != nil {
-		t.Fatalf("ParseTPKT error: %v", err)
+		t.Fatalf("tpkt.Parse error: %v", err)
 	}
-	if tpkt.Length != uint16(len(raw)) {
-		t.Fatalf("unexpected tpkt length: %d", tpkt.Length)
+	if f.Len() != len(raw) {
+		t.Fatalf("unexpected tpkt length: %d", f.Len())
 	}
-	c, rest, err := ParseCOTP(payload)
+	dec, err := cotp.Decode(f.Payload)
 	if err != nil {
-		t.Fatalf("ParseCOTP error: %v", err)
+		t.Fatalf("cotp.Decode error: %v", err)
 	}
-	if c.PDUType != COTPTypeDT {
-		t.Fatalf("expected DT pdu, got 0x%02X", c.PDUType)
+	if dec.Type != cotp.TypeDT {
+		t.Fatalf("expected DT pdu, got %s", dec.Type)
 	}
-	if len(rest) != 0 {
-		t.Fatalf("expected no rest, got %d", len(rest))
+	if dec.DT == nil {
+		t.Fatal("expected DT non-nil")
 	}
 }
 
 func TestFixtureCOTPCCFrame(t *testing.T) {
 	raw := loadHexFixture(t, "../testdata/frames/cotp_cc.hex")
-	c, rest, err := ParseCOTP(raw)
+	dec, err := cotp.Decode(raw)
 	if err != nil {
-		t.Fatalf("ParseCOTP error: %v", err)
+		t.Fatalf("cotp.Decode error: %v", err)
 	}
-	if c.PDUType != COTPTypeCC {
-		t.Fatalf("expected CC pdu, got 0x%02X", c.PDUType)
+	if dec.Type != cotp.TypeCC {
+		t.Fatalf("expected CC pdu, got %s", dec.Type)
 	}
-	if len(rest) != 0 {
-		t.Fatalf("expected no rest, got %d", len(rest))
+	if dec.CC == nil {
+		t.Fatal("expected CC non-nil")
 	}
 }
 

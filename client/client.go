@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/otfabric/go-cotp"
 	"github.com/otfabric/s7comm/model"
 	"github.com/otfabric/s7comm/transport"
 	"github.com/otfabric/s7comm/wire"
@@ -142,10 +143,11 @@ func (c *Client) cotpConnect(ctx context.Context) error {
 	c.localTSAP = localTSAP
 	c.remoteTSAP = remoteTSAP
 
-	cr := wire.EncodeCOTPCR(localTSAP, remoteTSAP)
-	frame := wire.EncodeTPKT(cr)
-
-	if err := c.conn.SendContext(ctx, frame); err != nil {
+	crBytes, err := wire.EncodeCOTPCR(localTSAP, remoteTSAP)
+	if err != nil {
+		return fmt.Errorf("encode COTP CR: %w", err)
+	}
+	if err := c.conn.SendContext(ctx, crBytes); err != nil {
 		return err
 	}
 
@@ -154,18 +156,12 @@ func (c *Client) cotpConnect(ctx context.Context) error {
 		return err
 	}
 
-	_, cotpData, err := wire.ParseTPKT(resp)
+	dec, err := cotp.Decode(resp)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode COTP: %w", err)
 	}
-
-	cotp, _, err := wire.ParseCOTP(cotpData)
-	if err != nil {
-		return err
-	}
-
-	if cotp.PDUType != wire.COTPTypeCC {
-		return fmt.Errorf("expected COTP CC, got 0x%02X", cotp.PDUType)
+	if dec.Type != cotp.TypeCC {
+		return fmt.Errorf("expected COTP CC, got %s", dec.Type)
 	}
 
 	return nil
@@ -177,10 +173,11 @@ func (c *Client) s7Setup(ctx context.Context) (*wire.SetupCommResponse, error) {
 	}
 
 	req := wire.EncodeSetupCommRequest(c.opts.maxAmqCalling, c.opts.maxAmqCalled, c.opts.maxPDU)
-	cotp := wire.EncodeCOTPData()
-	frame := wire.EncodeTPKT(append(cotp, req...))
-
-	if err := c.conn.SendContext(ctx, frame); err != nil {
+	dtBytes, err := wire.EncodeCOTPDT(req)
+	if err != nil {
+		return nil, fmt.Errorf("encode COTP DT: %w", err)
+	}
+	if err := c.conn.SendContext(ctx, dtBytes); err != nil {
 		return nil, err
 	}
 
@@ -189,15 +186,14 @@ func (c *Client) s7Setup(ctx context.Context) (*wire.SetupCommResponse, error) {
 		return nil, err
 	}
 
-	_, cotpData, err := wire.ParseTPKT(resp)
+	dec, err := cotp.Decode(resp)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode COTP: %w", err)
 	}
-
-	_, s7Data, err := wire.ParseCOTP(cotpData)
-	if err != nil {
-		return nil, err
+	if dec.DT == nil {
+		return nil, fmt.Errorf("expected COTP DT, got %s", dec.Type)
 	}
+	s7Data := dec.DT.UserData
 
 	header, paramData, err := wire.ParseS7Header(s7Data)
 	if err != nil {
@@ -221,9 +217,11 @@ func (c *Client) nextPDURef() uint16 {
 }
 
 func (c *Client) sendReceive(ctx context.Context, req []byte) ([]byte, []byte, error) {
-	cotp := wire.EncodeCOTPData()
-	frame := wire.EncodeTPKT(append(cotp, req...))
-	if err := c.conn.SendContext(ctx, frame); err != nil {
+	dtBytes, err := wire.EncodeCOTPDT(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode COTP DT: %w", err)
+	}
+	if err := c.conn.SendContext(ctx, dtBytes); err != nil {
 		return nil, nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -235,15 +233,14 @@ func (c *Client) sendReceive(ctx context.Context, req []byte) ([]byte, []byte, e
 		return nil, nil, err
 	}
 
-	_, cotpData, err := wire.ParseTPKT(resp)
+	dec, err := cotp.Decode(resp)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("decode COTP: %w", err)
 	}
-
-	_, s7Data, err := wire.ParseCOTP(cotpData)
-	if err != nil {
-		return nil, nil, err
+	if dec.DT == nil {
+		return nil, nil, fmt.Errorf("expected COTP DT, got %s", dec.Type)
 	}
+	s7Data := dec.DT.UserData
 
 	header, rest, err := wire.ParseS7Header(s7Data)
 	if err != nil {

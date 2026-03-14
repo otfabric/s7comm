@@ -1,20 +1,23 @@
-// Package transport provides TCP connection handling for S7.
+// Package transport provides TCP connection handling for S7 using go-tpkt for TPKT framing.
 package transport
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"time"
+
+	"github.com/otfabric/go-tpkt"
 )
 
 var ErrConnectionNotEstablished = errors.New("connection not established")
 
-// Conn wraps a TCP connection with S7-specific handling
+// Conn wraps a TCP connection with TPKT framing (go-tpkt) for S7/COTP payloads.
 type Conn struct {
 	conn    net.Conn
+	reader  *tpkt.Reader
+	writer  *tpkt.Writer
 	timeout time.Duration
 	tracer  Tracer
 }
@@ -24,10 +27,13 @@ type Tracer interface {
 	Trace(direction string, data []byte)
 }
 
-// New creates a new S7 connection wrapper
+// New creates a new S7 connection wrapper. Send accepts TPDU payload (e.g. COTP bytes);
+// Receive returns the TPDU payload of the next TPKT frame.
 func New(conn net.Conn, timeout time.Duration) *Conn {
 	return &Conn{
 		conn:    conn,
+		reader:  tpkt.NewReader(conn),
+		writer:  tpkt.NewWriter(conn),
 		timeout: timeout,
 	}
 }
@@ -37,12 +43,12 @@ func (c *Conn) SetTracer(t Tracer) {
 	c.tracer = t
 }
 
-// Send sends a complete frame over the connection
+// Send sends a TPDU payload as one TPKT frame (using go-tpkt).
 func (c *Conn) Send(data []byte) error {
 	return c.SendContext(context.Background(), data)
 }
 
-// SendContext sends a complete frame over the connection with context cancellation support.
+// SendContext sends a TPDU payload as one TPKT frame with context cancellation support.
 func (c *Conn) SendContext(ctx context.Context, data []byte) error {
 	if c.conn == nil {
 		return ErrConnectionNotEstablished
@@ -59,16 +65,16 @@ func (c *Conn) SendContext(ctx context.Context, data []byte) error {
 	if c.tracer != nil {
 		c.tracer.Trace("TX", data)
 	}
-	_, err := c.conn.Write(data)
+	_, err := c.writer.WriteFrame(data)
 	return err
 }
 
-// Receive reads a complete TPKT frame from the connection
+// Receive reads the next TPKT frame and returns its payload (e.g. COTP TPDU).
 func (c *Conn) Receive() ([]byte, error) {
 	return c.ReceiveContext(context.Background())
 }
 
-// ReceiveContext reads a complete TPKT frame from the connection with context cancellation support.
+// ReceiveContext reads the next TPKT frame with context cancellation and returns its payload.
 func (c *Conn) ReceiveContext(ctx context.Context) ([]byte, error) {
 	if c.conn == nil {
 		return nil, ErrConnectionNotEstablished
@@ -83,35 +89,14 @@ func (c *Conn) ReceiveContext(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 
-	// Read TPKT header (4 bytes)
-	header := make([]byte, 4)
-	_, err := io.ReadFull(c.conn, header)
+	payload, err := c.reader.ReadFrame()
 	if err != nil {
-		return nil, fmt.Errorf("read TPKT header: %w", err)
+		return nil, fmt.Errorf("read TPKT frame: %w", err)
 	}
-
-	// Validate TPKT version
-	if header[0] != 3 {
-		return nil, fmt.Errorf("invalid TPKT version: %d", header[0])
-	}
-
-	// Get length and read rest of frame
-	length := int(header[2])<<8 | int(header[3])
-	if length < 4 {
-		return nil, fmt.Errorf("invalid TPKT length: %d", length)
-	}
-
-	frame := make([]byte, length)
-	copy(frame[:4], header)
-	_, err = io.ReadFull(c.conn, frame[4:])
-	if err != nil {
-		return nil, fmt.Errorf("read TPKT payload: %w", err)
-	}
-
 	if c.tracer != nil {
-		c.tracer.Trace("RX", frame)
+		c.tracer.Trace("RX", payload)
 	}
-	return frame, nil
+	return payload, nil
 }
 
 func setReadDeadline(conn net.Conn, timeout time.Duration, ctx context.Context) error {
