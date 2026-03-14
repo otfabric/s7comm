@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -41,7 +43,7 @@ jobs:
       - name: Coverage
         if: matrix.go-version == '1.22'
         run: |
-          go test -coverprofile=coverage.out ./...
+          go test -covermode=atomic -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage.txt
           go tool cover -html=coverage.out -o coverage.html
 
@@ -70,7 +72,10 @@ jobs:
         with:
           use_oidc: true
           files: coverage.out
+          disable_search: true
           flags: unittests
           name: go-tpkt
           fail_ci_if_error: true
           verbose: true
+          override_commit: ${{ github.event.pull_request.head.sha || github.sha }}
+          override_branch: ${{ github.head_ref || github.ref_name }}
